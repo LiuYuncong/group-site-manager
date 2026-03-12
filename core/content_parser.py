@@ -141,13 +141,12 @@ class ContentManager:
                 elif date and not isinstance(date, str):
                     date = str(date)
 
-                items.append({
-                    'folder_name': item_path.name,
-                    'folder_path': str(item_path),
-                    'title': title,
-                    'date': date,
-                    **metadata  # 包含其他字段，便于 UI 扩展
-                })
+                item = metadata.copy()
+                item['folder_name'] = item_path.name
+                item['folder_path'] = str(item_path)
+                item['title'] = title          # 确保使用我们提取的 title
+                item['date'] = date            # 确保使用我们转换后的 date 字符串
+                items.append(item)
         except Exception as e:
             logger.exception(f"遍历模块 {module_name} 时发生未知错误: {e}")
             return False, f"读取内容列表时出错：{str(e)}"
