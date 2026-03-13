@@ -19,7 +19,9 @@ import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any
-
+import logging
+from typing import List, Callable, Optional, Dict, Any
+import frontmatter
 import customtkinter as ctk
 
 from core.content_parser import ContentManager
@@ -43,7 +45,7 @@ class ContentListFrame(ctk.CTkScrollableFrame):
         self.module_name = module_name
         self.on_edit_callback = on_edit_callback
         self.content_manager = ContentManager()
-
+        self.config = self.content_manager.config # 方便后续使用配置路径
         # 显示加载状态
         self.loading_label = ctk.CTkLabel(self, text="加载中...", font=ctk.CTkFont(size=14))
         self.loading_label.pack(pady=20)
@@ -144,6 +146,7 @@ class ContentFormFrame(ctk.CTkFrame):
         self.on_save_callback = on_save_callback
         self.on_cancel_callback = on_cancel_callback
         self.content_manager = ContentManager()
+        self.config = self.content_manager.config
 
         # 表单数据存储
         self.form_data = {}
@@ -155,7 +158,63 @@ class ContentFormFrame(ctk.CTkFrame):
         # 如果是更新，加载现有数据
         if self.folder_name:
             self._load_existing_data()
+    
+    def _load_user_groups_options(self) -> List[str]:
+        """从 people/index.md 和 alumni/_index.md 中动态提取 user_groups 选项，兼容多种 Hugo 结构"""
+        options = set()
+        default_options = [
+            "团队负责人(PI)", "团队合作专家", "专任教师", "博士后",
+            "博士研究生", "硕士研究生", "研究员", "管理人员",
+            "访问学者", "博士", "硕士", "本科生"
+        ]
 
+        def extract_groups(meta_dict):
+            """内部辅助：在 metadata 字典中灵活寻找 user_groups"""
+            # 兼容 Hugo Blox v7+ (blocks) 和 v5/v6 (sections)
+            for key in ['blocks', 'sections']:
+                for item in meta_dict.get(key, []):
+                    if isinstance(item, dict):
+                        options.update(item.get('content', {}).get('user_groups', []))
+            # 兼容极简配置或旧版 (直接挂载在 content 下)
+            options.update(meta_dict.get('content', {}).get('user_groups', []))
+
+        # 1. 尝试读取在校团队的类别
+        people_index = self.config.get_module_dir("people") / "index.md"
+        if not people_index.exists():
+            people_index = self.config.get_module_dir("people") / "_index.md"
+
+        if people_index.exists():
+            try:
+                with open(people_index, 'r', encoding='utf-8') as f:
+                    post = frontmatter.load(f)
+                    extract_groups(post.metadata)
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"读取 {people_index.name} 获取身份类别失败: {e}")
+
+        # 2. 尝试读取校友团队的类别
+        alumni_index = self.config.get_module_dir("alumni") / "_index.md"
+        if not alumni_index.exists():
+            alumni_index = self.config.get_module_dir("alumni") / "index.md"
+
+        if alumni_index.exists():
+            try:
+                with open(alumni_index, 'r', encoding='utf-8') as f:
+                    post = frontmatter.load(f)
+                    extract_groups(post.metadata)
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"读取 {alumni_index.name} 获取身份类别失败: {e}")
+
+        # 合并默认配置
+        if not options:
+            options.update(default_options)
+        else:
+            # 补齐隐藏类别
+            options.update(["博士", "硕士", "本科生"])
+
+        # 过滤并排序
+        return sorted([opt for opt in list(options) if opt and isinstance(opt, str)])
     def _create_widgets(self):
         """构建表单界面"""
         # 标题行
@@ -190,14 +249,21 @@ class ContentFormFrame(ctk.CTkFrame):
 
         # authors 模块特有字段
         if self.module_name == "authors":
-            ctk.CTkLabel(self, text="身份类别：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
-            self.role_option = ctk.CTkOptionMenu(
-                self,
-                values=["教授", "副教授", "讲师", "博士后", "博士生", "硕士生", "校友", "其他"]
-            )
-            self.role_option.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
-            self.role_option.set("教授")  # 默认值
-            row_counter += 1
+                # 1. 身份类别 (系统分类)
+                ctk.CTkLabel(self, text="身份组别 (user_groups)：\n(决定显示在哪个页面)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.user_group_option = ctk.CTkOptionMenu(
+                    self,
+                    values=self._load_user_groups_options(),
+                    width=250
+                )
+                self.user_group_option.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 添加角色输入框，用于描述具体头衔或角色信息
+                ctk.CTkLabel(self, text="头衔/角色 (role)：\n(例如：2021级博士生)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.role_entry = ctk.CTkEntry(self, width=250)
+                self.role_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
 
         # publication 模块特有字段
         if self.module_name == "publication":
@@ -257,11 +323,26 @@ class ContentFormFrame(ctk.CTkFrame):
 
         # 填充模块特有字段
         if self.module_name == "authors":
-            role = fm.get('role', '教授')
-            self.role_option.set(role)
-        elif self.module_name == "publication":
-            bibtex = fm.get('bibtex', '')
-            self.bibtex_text.insert("1.0", bibtex)
+            # 从 front matter 中加载用户组别信息
+            # 如果存在用户组别列表，默认选择第一个主要类别显示在下拉框中
+            # 注意：当前 UI 限制为单选下拉框，因此多组别的情况会被覆盖
+            # 如果读取到的值不在抓取的选项列表中，将其动态插入并设置为当前值
+
+            user_groups = fm.get('user_groups', [])
+            if user_groups and isinstance(user_groups, list):
+                # 默认取第一个主要类别显示在下拉框中
+                if user_groups[0] in self.user_group_option._values:
+                    self.user_group_option.set(user_groups[0])
+                else:
+                    # 如果读取到的值不在抓取的选项列表中，强行插入显示
+                    self.user_group_option.configure(values=self.user_group_option._values + [user_groups[0]])
+                    self.user_group_option.set(user_groups[0])
+
+            # 从 front matter 中加载角色信息
+            # 清空角色输入框并填充读取到的角色值
+            role = fm.get('role', '')
+            self.role_entry.delete(0, 'end')
+            self.role_entry.insert(0, role)
 
         # 图片路径无法自动获取，用户需要重新选择或留空
 
@@ -276,10 +357,15 @@ class ContentFormFrame(ctk.CTkFrame):
 
         # 收集模块特有字段
         if self.module_name == "authors":
-            form_data['role'] = self.role_option.get()
-        elif self.module_name == "publication":
-            form_data['bibtex'] = self.bibtex_text.get("1.0", "end-1c")
-
+            # 严格确保存入的是列表格式
+            form_data['user_groups'] = [self.user_group_option.get()]
+            
+            # role 保存为字符串，如果为空则删除该键或置空，防止 YAML 生成无效数据
+            role_val = self.role_entry.get().strip()
+            if role_val:
+                form_data['role'] = role_val
+            else:
+                form_data['role'] = ""
         # 简单验证
         if not form_data['title']:
             messagebox.showwarning("提示", "标题不能为空")
