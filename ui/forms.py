@@ -147,6 +147,7 @@ class ContentFormFrame(ctk.CTkFrame):
         self.on_cancel_callback = on_cancel_callback
         self.content_manager = ContentManager()
         self.config = self.content_manager.config
+        self._other_social_links = [] 
 
         # 表单数据存储
         self.form_data = {}
@@ -264,6 +265,40 @@ class ContentFormFrame(ctk.CTkFrame):
                 self.role_entry = ctk.CTkEntry(self, width=250)
                 self.role_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
                 row_counter += 1
+                            # 新增：联系邮箱
+                ctk.CTkLabel(self, text="邮箱 (email)：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+                self.email_entry = ctk.CTkEntry(self, width=300)
+                self.email_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 新增：组织/单位 (每行格式: 组织名称|组织网址，网址可选)
+                ctk.CTkLabel(self, text="组织/单位 (organizations)：\n每行格式：名称|网址 (网址可选)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.organizations_text = ctk.CTkTextbox(self, height=80, width=300)
+                self.organizations_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 新增：教育背景 (每行格式: 学位|学校|年份)
+                ctk.CTkLabel(self, text="教育背景 (education)：\n每行格式：学位|学校|年份", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.education_text = ctk.CTkTextbox(self, height=100, width=300)
+                self.education_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 新增：社交链接
+                ctk.CTkLabel(self, text="Google Scholar 链接：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+                self.google_scholar_entry = ctk.CTkEntry(self, width=300)
+                self.google_scholar_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                ctk.CTkLabel(self, text="ResearchGate 链接：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+                self.researchgate_entry = ctk.CTkEntry(self, width=300)
+                self.researchgate_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 研究方向 (interests)
+                ctk.CTkLabel(self, text="研究方向 (interests)：\n每行一项", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.interests_text = ctk.CTkTextbox(self, height=120, width=300)
+                self.interests_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
 
         # publication 模块特有字段
         if self.module_name == "publication":
@@ -343,6 +378,44 @@ class ContentFormFrame(ctk.CTkFrame):
             role = fm.get('role', '')
             self.role_entry.delete(0, 'end')
             self.role_entry.insert(0, role)
+                        # 从 front matter 中加载社交链接
+            social = fm.get('social', [])
+            gs_link = ""
+            rg_link = ""
+            email_link = ""
+            other_social = []
+            for item in social:
+                icon = item.get('icon')
+                link = item.get('link', '')
+                if icon == 'google-scholar':
+                    gs_link = link
+                elif icon == 'researchgate':
+                    rg_link = link
+                elif icon == 'envelope':
+                    # 邮箱链接格式为 mailto:xxx
+                    if link.startswith('mailto:'):
+                        email_link = link[7:]  # 去掉 'mailto:'
+                    else:
+                        email_link = link
+                else:
+                    other_social.append(item)
+
+            # 填充邮箱、Google Scholar、ResearchGate 输入框
+            self.email_entry.delete(0, 'end')
+            self.email_entry.insert(0, email_link)
+            self.google_scholar_entry.delete(0, 'end')
+            self.google_scholar_entry.insert(0, gs_link)
+            self.researchgate_entry.delete(0, 'end')
+            self.researchgate_entry.insert(0, rg_link)
+
+            # 保存其他社交链接，以便在保存时重新合并
+            self._other_social_links = other_social
+            # 加载研究方向
+            interests = fm.get('interests', [])
+            if interests and isinstance(interests, list):
+                self.interests_text.delete("1.0", "end")
+                self.interests_text.insert("1.0", "\n".join(interests))
+            
 
         # 图片路径无法自动获取，用户需要重新选择或留空
 
@@ -357,19 +430,87 @@ class ContentFormFrame(ctk.CTkFrame):
 
         # 收集模块特有字段
         if self.module_name == "authors":
-            # 严格确保存入的是列表格式
+            # user_groups 信息
+            # 将下拉框中选中的身份组别保存为列表形式
             form_data['user_groups'] = [self.user_group_option.get()]
-            
-            # role 保存为字符串，如果为空则删除该键或置空，防止 YAML 生成无效数据
+
+            # role 信息
+            # 从输入框中获取角色信息，若为空则保存为空字符串
             role_val = self.role_entry.get().strip()
-            if role_val:
-                form_data['role'] = role_val
-            else:
-                form_data['role'] = ""
-        # 简单验证
-        if not form_data['title']:
-            messagebox.showwarning("提示", "标题不能为空")
-            return
+            form_data['role'] = role_val if role_val else ""
+
+            # email 信息
+            # 若邮箱输入框不为空，则保存邮箱地址
+            email_val = self.email_entry.get().strip()
+            if email_val:
+                form_data['email'] = email_val
+
+            # organizations 信息
+            # 将多行组织信息解析为包含 name 和 url 的字典列表
+            org_text = self.organizations_text.get("1.0", "end-1c").strip()
+            org_list = []
+            if org_text:
+                for line in org_text.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split('|', 1)
+                    if len(parts) == 2:
+                        org_list.append({'name': parts[0].strip(), 'url': parts[1].strip()})
+                    else:
+                        org_list.append({'name': parts[0].strip()})
+            if org_list:
+                form_data['organizations'] = org_list
+
+            # education 信息
+            # 将多行教育经历解析为包含 course, institution, year 的字典列表
+            edu_text = self.education_text.get("1.0", "end-1c").strip()
+            edu_list = []
+            if edu_text:
+                for line in edu_text.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split('|', 2)
+                    course = parts[0].strip() if len(parts) > 0 else ""
+                    institution = parts[1].strip() if len(parts) > 1 else ""
+                    year = parts[2].strip() if len(parts) > 2 else ""
+                    edu_list.append({'course': course, 'institution': institution, 'year': year})
+            if edu_list:
+                form_data['education'] = {'courses': edu_list}
+
+            # social links 信息
+            # 合并新增的社交链接与之前暂存的未知链接，避免数据丢失
+                        # 构建社交链接列表
+            social_list = []
+
+            # 邮箱
+            email_val = self.email_entry.get().strip()
+            if email_val:
+                social_list.append({'icon': 'envelope', 'icon_pack': 'fas', 'link': f'mailto:{email_val}'})
+
+            # Google Scholar
+            gs_link = self.google_scholar_entry.get().strip()
+            if gs_link:
+                social_list.append({'icon': 'google-scholar', 'icon_pack': 'ai', 'link': gs_link})
+
+            # ResearchGate
+            rg_link = self.researchgate_entry.get().strip()
+            if rg_link:
+                social_list.append({'icon': 'researchgate', 'icon_pack': 'ai', 'link': rg_link})
+
+            # 合并之前保存的其他社交链接
+            if hasattr(self, '_other_social_links') and self._other_social_links:
+                social_list.extend(self._other_social_links)
+
+            if social_list:
+                form_data['social'] = social_list
+            # 研究方向
+            interests_text = self.interests_text.get("1.0", "end-1c").strip()
+            if interests_text:
+                interests_list = [line.strip() for line in interests_text.split('\n') if line.strip()]
+                if interests_list:
+                    form_data['interests'] = interests_list
 
         # 调用保存方法
         image_path = self.image_path_var.get() or None
