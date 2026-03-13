@@ -86,7 +86,7 @@ class ContentManager:
         列出指定模块下的所有内容项。
 
         每个模块目录下应有多个子文件夹，每个子文件夹代表一个内容项，
-        内含 index.md 文件。该方法遍历子文件夹，读取 index.md 的 front-matter，
+        内含 index.md 或 _index.md 文件。该方法遍历子文件夹，读取文件，
         提取标题、日期等信息。
 
         Args:
@@ -112,40 +112,42 @@ class ContentManager:
             for item_path in module_dir.iterdir():
                 if not item_path.is_dir():
                     continue
+
+                # === 修改点：双重探测 index.md 或 _index.md ===
+                # 首先尝试 index.md
                 index_file = item_path / "index.md"
                 if not index_file.exists():
-                    continue
+                    # 如果不存在，再尝试 _index.md（用于 authors 等分支包）
+                    index_file = item_path / "_index.md"
+                    if not index_file.exists():
+                        # 两种文件都不存在，跳过该文件夹
+                        continue
 
-                # 在 list_items 的循环内修改：
                 try:
                     with open(index_file, 'r', encoding='utf-8') as f:
                         post = frontmatter.load(f)
-                    
-                    # 如果 front-matter 为空，视为无效内容（如纯文本文件），跳过
+                    # 如果 front-matter 为空，视为无效内容，跳过
                     if not post.metadata:
                         continue
                 except Exception as e:
                     logger.error(f"解析文件 {index_file} 失败: {e}")
                     continue
-                except Exception as e:
-                    logger.error(f"解析文件 {index_file} 失败: {e}")
-                    continue
 
-                # 提取基本信息
                 metadata = post.metadata
                 title = metadata.get('title', item_path.name)
                 date = metadata.get('date', '')
-                # 如果 date 是 datetime 对象，转为字符串
+                # 将 datetime 对象转换为字符串
                 if isinstance(date, datetime):
                     date = date.strftime('%Y-%m-%d')
                 elif date and not isinstance(date, str):
                     date = str(date)
 
+                # 创建条目字典：复制所有元数据，并手动添加必要字段
                 item = metadata.copy()
                 item['folder_name'] = item_path.name
                 item['folder_path'] = str(item_path)
-                item['title'] = title          # 确保使用我们提取的 title
-                item['date'] = date            # 确保使用我们转换后的 date 字符串
+                item['title'] = title
+                item['date'] = date
                 items.append(item)
         except Exception as e:
             logger.exception(f"遍历模块 {module_name} 时发生未知错误: {e}")
@@ -158,7 +160,7 @@ class ContentManager:
     # ---------- 读取单个内容 ----------
     def read_item(self, folder_path: Union[str, Path]) -> Tuple[bool, Union[Dict, str]]:
         """
-        读取指定文件夹下的 index.md，返回 front-matter 和正文。
+        读取指定文件夹下的 index.md 或 _index.md，返回 front-matter 和正文。
 
         Args:
             folder_path: 内容项所在的文件夹路径
@@ -171,10 +173,16 @@ class ContentManager:
                 - 失败时返回 (False, 错误信息)
         """
         folder = Path(folder_path)
-        index_file = folder / "index.md"
 
+        # === 修改点：双重探测 index.md 或 _index.md ===
+        # 先尝试 index.md
+        index_file = folder / "index.md"
         if not index_file.exists():
-            return False, f"文件不存在：{index_file}"
+            # 如果不存在，尝试 _index.md
+            index_file = folder / "_index.md"
+            if not index_file.exists():
+                # 两种文件都不存在，返回错误
+                return False, f"未找到内容文件：{folder} 下缺少 index.md 或 _index.md"
 
         try:
             with open(index_file, 'r', encoding='utf-8') as f:
@@ -253,15 +261,37 @@ class ContentManager:
         # 创建 Post 对象（使用 frontmatter.Post）
         post = frontmatter.Post(content, **form_data)
 
-        # 写入 index.md
-        index_file = target_dir / "index.md"
+         # === 优化点：智能确定文件名 ===
+        md_filename = "index.md"  # 默认值
+
+        if original_folder_name:
+            # 更新：探测原有文件名
+            if (target_dir / "_index.md").exists():
+                md_filename = "_index.md"
+            elif (target_dir / "index.md").exists():
+                md_filename = "index.md"
+            else:
+                # 理论上不应发生（文件夹存在但没有任何文件），回退到模块默认
+                md_filename = "_index.md" if module_name == "authors" else "index.md"
+        else:
+            # 新建：根据模块分配
+            if module_name == "authors":
+                md_filename = "_index.md"
+            else:
+                md_filename = "index.md"
+
+        index_file = target_dir / md_filename
+        # ================================
+
+        # 创建 Post 对象
+        post = frontmatter.Post(content, **form_data)
+
         try:
             with open(index_file, 'w', encoding='utf-8') as f:
                 f.write(frontmatter.dumps(post))
         except OSError as e:
             logger.error(f"写入文件失败 {index_file}: {e}")
             return False, f"保存文件失败：{str(e)}"
-
         # 处理图片
         if image_path:
             # 确定图片类型

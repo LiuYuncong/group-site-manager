@@ -78,12 +78,13 @@ def test_generate_safe_folder_name(content_manager):
 
 
 # ---------- 准备测试数据 ----------
-def create_test_item(base_dir: Path, folder_name: str, metadata: dict, content: str = ""):
-    """辅助函数：在 base_dir 下创建一个内容项（文件夹 + index.md）"""
+def create_test_item(base_dir: Path, folder_name: str, metadata: dict,
+                     content: str = "", filename: str = "index.md"):
+    """辅助函数：在 base_dir 下创建一个内容项（文件夹 + 指定的文件名）"""
     item_dir = base_dir / folder_name
     item_dir.mkdir(parents=True, exist_ok=True)
     post = frontmatter.Post(content, **metadata)
-    with open(item_dir / "index.md", 'w', encoding='utf-8') as f:
+    with open(item_dir / filename, 'w', encoding='utf-8') as f:
         f.write(frontmatter.dumps(post))
     return item_dir
 
@@ -198,8 +199,8 @@ def test_read_item_not_found(content_manager):
     """文件不存在应返回错误"""
     success, result = content_manager.read_item("/nonexistent/path")
     assert success is False
-    assert "文件不存在" in result
-
+    assert "缺少 index.md 或 _index.md" in result
+#我们改动了 read_item 的错误信息，但对应的测试断言没有更新
 
 def test_read_item_invalid_yaml(content_manager, tmp_path):
     """YAML 格式错误应捕获并返回错误"""
@@ -351,7 +352,7 @@ def test_save_item_update_no_image(content_manager, tmp_path):
 
 
 def test_save_item_new_with_avatar_for_authors(content_manager, tmp_path, mock_copy_image):
-    """authors 模块应使用 avatar 图片类型"""
+    """authors 模块新建应生成 _index.md 并使用 avatar 图片类型"""
     repo_root = tmp_path / "repo"
     content_manager.config.repo_path = repo_root
     module_dir = content_manager.config.get_module_dir("authors")
@@ -367,9 +368,13 @@ def test_save_item_new_with_avatar_for_authors(content_manager, tmp_path, mock_c
                                              image_path=image_path)
 
     assert success is True
-    # 验证图片复制时 type='avatar'
     expected_folder_name = "2025-03-13-张三"
     target_dir = module_dir / expected_folder_name
+    assert target_dir.exists()
+    # 检查生成的文件是 _index.md
+    assert (target_dir / "_index.md").exists()
+    assert not (target_dir / "index.md").exists()
+
     mock_copy_image.assert_called_once_with(image_path, target_dir, 'avatar')
 
 
@@ -413,3 +418,74 @@ def test_save_item_permission_error(content_manager, tmp_path):
         success, msg = content_manager.save_item("post", form_data, "内容")
         assert success is False
         assert "无法创建模块目录" in msg
+
+#新增测试：验证新建时不同模块生成正确文件名
+def test_save_item_new_creates_correct_filename_by_module(content_manager, tmp_path):
+    """新建时，post 模块生成 index.md，authors 模块生成 _index.md"""
+    repo_root = tmp_path / "repo"
+    content_manager.config.repo_path = repo_root
+
+    # 测试 post 模块
+    post_module_dir = content_manager.config.get_module_dir("post")
+    post_module_dir.mkdir(parents=True)
+    form_data = {'title': '文章', 'date': '2025-03-13'}
+    success, msg = content_manager.save_item("post", form_data, "内容")
+    assert success is True
+    post_dir = post_module_dir / "2025-03-13-文章"
+    assert (post_dir / "index.md").exists()
+    assert not (post_dir / "_index.md").exists()
+
+    # 测试 authors 模块
+    authors_module_dir = content_manager.config.get_module_dir("authors")
+    authors_module_dir.mkdir(parents=True)
+    form_data = {'title': '作者', 'date': '2025-03-13'}
+    success, msg = content_manager.save_item("authors", form_data, "简介")
+    assert success is True
+    author_dir = authors_module_dir / "2025-03-13-作者"
+    assert (author_dir / "_index.md").exists()
+    assert not (author_dir / "index.md").exists()
+
+    #新增测试：更新时尊重原有文件名
+def test_save_item_update_respects_existing_filename(content_manager, tmp_path):
+    """更新现有内容时，应使用原有的文件名（index.md 或 _index.md）"""
+    repo_root = tmp_path / "repo"
+    content_manager.config.repo_path = repo_root
+
+    module_dir = content_manager.config.get_module_dir("authors")
+    module_dir.mkdir(parents=True)
+    folder_name = "2025-03-13-张三"
+    folder_path = module_dir / folder_name
+    folder_path.mkdir()
+    with open(folder_path / "_index.md", 'w', encoding='utf-8') as f:
+        f.write("---\ntitle: 张三\ndate: '2025-03-13'\n---\n原内容")
+
+    form_data = {'title': '张三（更新）', 'date': '2025-03-13'}
+    success, msg = content_manager.save_item("authors", form_data, "新内容",
+                                             original_folder_name=folder_name,
+                                             image_path=None)
+
+    assert success is True
+    assert (folder_path / "_index.md").exists()
+    assert not (folder_path / "index.md").exists()
+    with open(folder_path / "_index.md", 'r', encoding='utf-8') as f:
+        updated_post = frontmatter.load(f)
+    assert updated_post.metadata['title'] == '张三（更新）'
+    # === 使用 strip() 忽略换行差异 ===
+    assert updated_post.content.strip() == "新内容"
+
+def test_list_items_authors_with_index(content_manager, tmp_path):
+    """authors 模块应能正确读取 _index.md 文件"""
+    repo_root = tmp_path / "repo"
+    content_manager.config.repo_path = repo_root
+    module_dir = content_manager.config.get_module_dir("authors")
+    module_dir.mkdir(parents=True)
+
+    folder = module_dir / "2025-03-01-张三"
+    folder.mkdir()
+    with open(folder / "_index.md", 'w', encoding='utf-8') as f:
+        f.write("---\ntitle: 张三\ndate: '2025-03-01'\n---\n简介")
+
+    success, items = content_manager.list_items("authors")
+    assert success is True
+    assert len(items) == 1
+    assert items[0]['title'] == "张三"
