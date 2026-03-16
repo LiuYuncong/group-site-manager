@@ -26,7 +26,61 @@ import customtkinter as ctk
 import tkinter.messagebox as messagebox
 from core.content_parser import ContentManager
 import yaml
+import re
+import bibtexparser
+from datetime import datetime
 
+
+def parse_bibtex_to_dict(bibtex_string):
+    """
+    解析 BibTeX 字符串，返回包含各字段的字典。
+    """
+    try:
+        parser = bibtexparser.bparser.BibTexParser(common_strings=True)
+        bib_database = bibtexparser.loads(bibtex_string, parser)
+        if not bib_database.entries:
+            return None
+        entry = bib_database.entries[0]
+
+        def clean(text):
+            if not text:
+                return ""
+            return re.sub(r'[{}]', '', text).strip()
+
+        title = clean(entry.get('title', ''))
+        year = clean(entry.get('year', ''))
+        month = clean(entry.get('month', '01')).lower()
+        month_map = {'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+                     'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+                     'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'}
+        month = month_map.get(month[:3], '01') if not month.isdigit() else month.zfill(2)
+        date_str = f"{year}-{month}-01" if year else datetime.now().strftime('%Y-%m-%d')
+        journal = clean(entry.get('journal', entry.get('booktitle', '')))
+        abstract = clean(entry.get('abstract', ''))
+        doi = clean(entry.get('doi', ''))
+        authors_raw = entry.get('author', '')
+        authors = [clean(a) for a in authors_raw.split(' and ')] if authors_raw else []
+        
+        pub_type = entry.get('ENTRYTYPE', 'article')
+        pub_type_map = {'article': '2', 'inproceedings': '1', 'conference': '1',
+                        'techreport': '3', 'phdthesis': '4', 'mastersthesis': '5',
+                        'book': '6', 'incollection': '7'}
+        pub_type_code = pub_type_map.get(pub_type, '2')
+        
+        return {
+            'title': title,
+            'date': date_str,
+            'authors': authors,
+            'publication': journal,
+            'publication_short': journal,
+            'abstract': abstract,
+            'doi': doi,
+            'publication_type': pub_type_code,
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"BibTeX 解析失败: {e}")
+        return None
 
 class ContentListFrame(ctk.CTkScrollableFrame):
     """
@@ -161,6 +215,50 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
         if self.folder_name:
             self._load_existing_data()
     
+    def _import_from_bibtex(self):
+        dialog = ctk.CTkInputDialog(
+            text="请粘贴 BibTeX 条目内容：",
+            title="从 BibTeX 导入"
+        )
+        bibtex_str = dialog.get_input()
+        if not bibtex_str:
+            return
+
+        parsed = parse_bibtex_to_dict(bibtex_str)
+        if not parsed:
+            messagebox.showerror("错误", "无法解析 BibTeX，请检查内容格式。")
+            return
+
+        # 填充表单
+        self.title_entry.delete(0, 'end')
+        self.title_entry.insert(0, parsed.get('title', ''))
+        
+        self.date_entry.delete(0, 'end')
+        self.date_entry.insert(0, parsed.get('date', ''))
+        
+        authors = parsed.get('authors', [])
+        self.authors_text.delete("1.0", "end")
+        self.authors_text.insert("1.0", "\n".join(authors))
+        
+        self.publication_entry.delete(0, 'end')
+        self.publication_entry.insert(0, parsed.get('publication', ''))
+        
+        self.publication_short_entry.delete(0, 'end')
+        self.publication_short_entry.insert(0, parsed.get('publication_short', ''))
+        
+        self.abstract_text.delete("1.0", "end")
+        self.abstract_text.insert("1.0", parsed.get('abstract', ''))
+        
+        self.doi_entry.delete(0, 'end')
+        self.doi_entry.insert(0, parsed.get('doi', ''))
+        
+        pub_type = parsed.get('publication_type', '2')
+        pub_type_map = {'1': '1 会议论文', '2': '2 期刊论文', '3': '3 预印本',
+                        '4': '4 学位论文', '5': '5 专著', '6': '6 其他'}
+        self.pub_type_option.set(pub_type_map.get(pub_type, '2 期刊论文'))
+        
+        messagebox.showinfo("成功", "BibTeX 解析完成，请检查并补充信息。")
+
     def _load_user_groups_options(self) -> List[str]:
         """从 people/index.md 和 alumni/_index.md 中动态提取 user_groups 选项，兼容多种 Hugo 结构"""
         options = set()
@@ -301,18 +399,92 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                 self.interests_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
                 row_counter += 1
 
-        # publication 模块特有字段
-        if self.module_name == "publication":
-            ctk.CTkLabel(self, text="BibTeX 引用：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
-            self.bibtex_text = ctk.CTkTextbox(self, height=150, width=400)
-            self.bibtex_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
-            row_counter += 1
+        
             
         if self.module_name in ["research_directions", "research_fields"]:
                         ctk.CTkLabel(self, text="摘要 (summary)：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
                         self.summary_entry = ctk.CTkEntry(self, width=400)
                         self.summary_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
                         row_counter += 1
+        elif self.module_name == "publication":
+            # 从 BibTeX 导入按钮
+            import_btn = ctk.CTkButton(self, text="📥 从 BibTeX 导入", command=self._import_from_bibtex)
+            import_btn.grid(row=row_counter, column=0, columnspan=2, padx=10, pady=10, sticky="w")
+            row_counter += 1
+
+        
+            # 作者
+            ctk.CTkLabel(self, text="作者 (每行一位)：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+            self.authors_text = ctk.CTkTextbox(self, height=80, width=300)
+            self.authors_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 作者备注
+            ctk.CTkLabel(self, text="作者备注 (可选，每行一位)：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+            self.author_notes_text = ctk.CTkTextbox(self, height=80, width=300)
+            self.author_notes_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 出版物类型
+            ctk.CTkLabel(self, text="出版物类型：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.pub_type_option = ctk.CTkOptionMenu(
+                self,
+                values=["1 会议论文", "2 期刊论文", "3 预印本", "4 学位论文", "5 专著", "6 其他"],
+                width=150
+            )
+            self.pub_type_option.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            self.pub_type_option.set("2 期刊论文")
+            row_counter += 1
+
+            # 出版物名称
+            ctk.CTkLabel(self, text="出版物名称：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.publication_entry = ctk.CTkEntry(self, width=300)
+            self.publication_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
+            row_counter += 1
+
+            # 出版物简称
+            ctk.CTkLabel(self, text="出版物简称：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.publication_short_entry = ctk.CTkEntry(self, width=200)
+            self.publication_short_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 摘要
+            ctk.CTkLabel(self, text="摘要：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+            self.abstract_text = ctk.CTkTextbox(self, height=100, width=400)
+            self.abstract_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
+            row_counter += 1
+
+            # DOI
+            ctk.CTkLabel(self, text="DOI：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.doi_entry = ctk.CTkEntry(self, width=250)
+            self.doi_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 标签
+            ctk.CTkLabel(self, text="标签 (逗号分隔)：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.tags_entry = ctk.CTkEntry(self, width=300)
+            self.tags_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 是否推荐
+            self.featured_var = ctk.BooleanVar(value=False)
+            self.featured_check = ctk.CTkCheckBox(self, text="推荐此论文 (featured)", variable=self.featured_var)
+            self.featured_check.grid(row=row_counter, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 图片说明 (caption)
+            ctk.CTkLabel(self, text="图片说明 (可选)：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.image_caption_entry = ctk.CTkEntry(self, width=300)
+            self.image_caption_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            # 相关项目
+            ctk.CTkLabel(self, text="相关项目 (逗号分隔)：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+            self.projects_entry = ctk.CTkEntry(self, width=300)
+            self.projects_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+            row_counter += 1
+
+            
         # 正文（所有模块都有）
         ctk.CTkLabel(self, text="正文：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
         self.content_text = ctk.CTkTextbox(self, height=300, width=500)
@@ -427,7 +599,64 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                 summary = fm.get('summary', '')
                 self.summary_entry.delete(0, 'end')
                 self.summary_entry.insert(0, summary)
-
+        elif self.module_name == "publication":
+            self.title_entry.delete(0, 'end')
+            self.title_entry.insert(0, fm.get('title', ''))
+            
+            self.date_entry.delete(0, 'end')
+            self.date_entry.insert(0, fm.get('date', ''))
+            
+            authors = fm.get('authors', [])
+            if isinstance(authors, list):
+                self.authors_text.delete("1.0", "end")
+                self.authors_text.insert("1.0", "\n".join(authors))
+                
+            author_notes = fm.get('author_notes', [])
+            if isinstance(author_notes, list):
+                self.author_notes_text.delete("1.0", "end")
+                self.author_notes_text.insert("1.0", "\n".join(author_notes))
+                
+            pub_types = fm.get('publication_types', ['2'])
+            if pub_types and isinstance(pub_types, list):
+                pub_type_code = str(pub_types[0]) if len(pub_types) > 0 else '2'
+                pub_type_map = {'1': '1 会议论文', '2': '2 期刊论文', '3': '3 预印本',
+                                '4': '4 学位论文', '5': '5 专著', '6': '6 其他'}
+                self.pub_type_option.set(pub_type_map.get(pub_type_code, '2 期刊论文'))
+                
+            self.publication_entry.delete(0, 'end')
+            self.publication_entry.insert(0, fm.get('publication', ''))
+            
+            self.publication_short_entry.delete(0, 'end')
+            self.publication_short_entry.insert(0, fm.get('publication_short', ''))
+            
+            self.abstract_text.delete("1.0", "end")
+            self.abstract_text.insert("1.0", fm.get('abstract', ''))
+            
+            self.doi_entry.delete(0, 'end')
+            self.doi_entry.insert(0, fm.get('doi', ''))
+            
+            tags = fm.get('tags', [])
+            if isinstance(tags, list):
+                self.tags_entry.delete(0, 'end')
+                self.tags_entry.insert(0, ', '.join(tags))
+                
+            self.featured_var.set(fm.get('featured', False))
+            
+            # 安全加载 image caption
+            image_data = fm.get('image', {})
+            if isinstance(image_data, dict):
+                self.image_caption_entry.delete(0, 'end')
+                self.image_caption_entry.insert(0, image_data.get('caption', ''))
+                
+            projects = fm.get('projects', [])
+            if isinstance(projects, list):
+                self.projects_entry.delete(0, 'end')
+                self.projects_entry.insert(0, ', '.join(projects))
+                
+            # 【修复点】：加载正确的 markdown 正文内容（根据你的环境，这里可能是 content 或 original_content）
+            # --- 修改后 ---
+            self.content_text.delete("1.0", "end")
+            self.content_text.insert("1.0", content) # 直接使用开头提取的 content 变量
     def _save(self):
         """收集表单数据并保存"""
         # 收集通用字段
@@ -525,6 +754,53 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
             summary_val = self.summary_entry.get().strip()
             if summary_val:
                 form_data['summary'] = summary_val
+
+        elif self.module_name == "publication":
+            
+            authors_text = self.authors_text.get("1.0", "end-1c").strip()
+            if authors_text:
+                form_data['authors'] = [line.strip() for line in authors_text.split('\n') if line.strip()]
+                
+            notes_text = self.author_notes_text.get("1.0", "end-1c").strip()
+            if notes_text:
+                form_data['author_notes'] = [line.strip() for line in notes_text.split('\n') if line.strip()]
+                
+            pub_type_str = self.pub_type_option.get()
+            pub_type_code = pub_type_str.split()[0]
+            form_data['publication_types'] = [pub_type_code]
+            
+            pub_name = self.publication_entry.get().strip()
+            if pub_name:
+                form_data['publication'] = pub_name
+                
+            pub_short = self.publication_short_entry.get().strip()
+            if pub_short:
+                form_data['publication_short'] = pub_short
+                
+            abstract = self.abstract_text.get("1.0", "end-1c").strip()
+            if abstract:
+                form_data['abstract'] = abstract
+                
+            doi = self.doi_entry.get().strip()
+            if doi:
+                form_data['doi'] = doi
+                
+            tags_str = self.tags_entry.get().strip()
+            if tags_str:
+                form_data['tags'] = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+                
+            form_data['featured'] = self.featured_var.get()
+            
+            # 【修复点】：预设 caption，核心处理图片部分将补充 filename
+            caption = self.image_caption_entry.get().strip()
+            if caption:
+                form_data['image'] = {'caption': caption}
+                
+            projects_str = self.projects_entry.get().strip()
+            if projects_str:
+                form_data['projects'] = [proj.strip() for proj in projects_str.split(',') if proj.strip()]
+                
+            content = self.content_text.get("1.0", "end-1c")
 
         # 调用保存方法
         image_path = self.image_path_var.get() or None

@@ -14,7 +14,8 @@ import tkinter.messagebox as messagebox
 import webbrowser
 from pathlib import Path
 from typing import Optional
-
+import bibtexparser
+from ui.forms import parse_bibtex_to_dict
 import customtkinter as ctk
 
 # 确保可以导入 core 模块
@@ -29,6 +30,41 @@ logger = logging.getLogger(__name__)
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
+
+class BatchBibtexDialog(ctk.CTkToplevel):
+    """支持多行文本的 BibTeX 批量导入对话框"""
+    def __init__(self, master, on_submit_callback):
+        super().__init__(master)
+        self.title("批量导入 BibTeX")
+        self.geometry("600x400")
+        self.on_submit_callback = on_submit_callback
+        
+        # 拦截关闭事件
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        
+        ctk.CTkLabel(self, text="请粘贴包含多篇文章的 BibTeX 代码：", font=ctk.CTkFont(weight="bold")).pack(pady=10, padx=10, anchor="w")
+        
+        self.textbox = ctk.CTkTextbox(self, width=580, height=280)
+        self.textbox.pack(padx=10, pady=5, fill="both", expand=True)
+        
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        
+        ctk.CTkButton(btn_frame, text="开始导入", command=self._on_submit, width=120).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="取消", command=self._on_cancel, width=120, fg_color="gray").pack(side="left", padx=10)
+        
+        # 设为模态窗口（阻塞主窗口）
+        self.transient(master)
+        self.grab_set()
+
+    def _on_submit(self):
+        text = self.textbox.get("1.0", "end-1c").strip()
+        if text:
+            self.on_submit_callback(text)
+        self.destroy()
+
+    def _on_cancel(self):
+        self.destroy()
 
 
 class MainWindow(ctk.CTk):
@@ -70,6 +106,112 @@ class MainWindow(ctk.CTk):
         self.select_frame_by_name("post")
 
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def _show_batch_import_dialog(self):
+        """打开批量导入弹窗"""
+        BatchBibtexDialog(self, self._process_batch_import)
+
+    def _process_batch_import(self, bibtex_str: str):
+        """处理批量导入的核心逻辑"""
+        
+        
+        # 课题组成员姓名映射字典 (已根据最新名单更新)
+        AUTHOR_MAP = {
+            "zhang xin": "张鑫",
+            "wang chunyu": "王春宇",
+            "hong congjie": "洪聪结",
+            "zhang yuyang": "张与阳",
+            "liu yuncong": "刘赟聪",
+            "ao yilong": "敖一龙",
+            "feng zilong": "丰子龙",
+            "xu yuhao": "续雨昊",
+            "xin jiahao": "辛嘉豪",
+            "sun fanghao": "孙昉昊",
+            "zhang tianqi": "张天琦",
+            "liu hu": "刘虎",
+            "wang ruinian": "王瑞年",
+            "he zhiyang": "何祉洋",
+            "zhang xu": "张旭",
+            "lin zefeng": "林泽峰",
+            "zhang huaixin": "张怀信",
+            "wang zihong": "王子宏",
+            "kang jialin": "康加霖",
+            "lei yizhe": "雷毅哲",
+            "shen zhihui": "沈志辉",
+            "wu zongjian": "吴宗键",
+            "lu jingsong": "鲁京松",
+            "zhang zihan": "张子涵",
+            "jiang zhimin": "姜志民",
+            "zhou zhefu": "周哲夫",
+            "yuan ming": "袁铭",
+            "wu honghuan": "伍宏环",
+            "zhao qian": "赵倩",
+            "huang wenlin": "黄文林",
+            "zhang rui": "张瑞",
+            "cao jun": "曹军",
+            "zhao hao": "赵浩",
+            "zhang qiying": "张齐英"
+        }
+
+        def normalize_name(name):
+            """将 'Zhang, Xin' 或 'Xin Zhang' 统一归一化为 'zhang xin' 以提高匹配率"""
+            # 去除逗号，变小写，去除多余空格
+            clean_name = name.replace(',', '').lower().strip()
+            parts = clean_name.split()
+            if len(parts) == 2:
+                # 尝试两种拼法：姓+名 或 名+姓，只要在字典里就返回
+                if f"{parts[0]} {parts[1]}" in AUTHOR_MAP:
+                    return AUTHOR_MAP[f"{parts[0]} {parts[1]}"]
+                if f"{parts[1]} {parts[0]}" in AUTHOR_MAP:
+                    return AUTHOR_MAP[f"{parts[1]} {parts[0]}"]
+            return name # 如果字典里没有，就原样返回英文名
+
+        try:
+            parser = bibtexparser.bparser.BibTexParser(common_strings=True)
+            bib_database = bibtexparser.loads(bibtex_str, parser)
+            
+            if not bib_database.entries:
+                messagebox.showerror("错误", "未解析到任何有效的 BibTeX 条目。")
+                return
+
+            success_count = 0
+            # 遍历解析出的所有论文
+            for entry in bib_database.entries:
+                # === 修复点：正确地构造和还原单条 BibTeX 记录 ===
+                db = bibtexparser.bibdatabase.BibDatabase()
+                db.entries = [entry]
+                single_bib = bibtexparser.dumps(db)
+                
+                parsed_data = parse_bibtex_to_dict(single_bib)
+                
+                if not parsed_data:
+                    continue
+                    
+                # 💡 核心步骤：执行作者姓名替换映射
+                mapped_authors = []
+                for author in parsed_data.get('authors', []):
+                    mapped_authors.append(normalize_name(author))
+                parsed_data['authors'] = mapped_authors
+
+                # 执行保存 (直接生成文件夹和 md 文件)
+                from core.content_parser import ContentManager
+                cm = ContentManager()
+                success, msg = cm.save_item(
+                    module_name="publication",
+                    form_data=parsed_data,
+                    content="", # 批量导入时正文留空
+                    original_folder_name=None, # None 表示新建
+                    image_path=None
+                )
+                if success:
+                    success_count += 1
+
+            messagebox.showinfo("批量导入完成", f"共解析 {len(bib_database.entries)} 篇文章，成功导入 {success_count} 篇！")
+            self._show_list() # 刷新当前列表，立刻就能看到新文章
+
+        except Exception as e:
+            logger.exception("批量导入失败")
+            messagebox.showerror("解析失败", f"发生了意外错误：{e}")
 
     # ---------- 布局 ----------
     def _create_layout(self):
@@ -169,6 +311,19 @@ class MainWindow(ctk.CTk):
         )
         self.new_btn.grid(row=0, column=0, padx=5)
 
+        # --- 新增代码：批量导入按钮 ---
+        self.batch_import_btn = ctk.CTkButton(
+            toolbar_frame, 
+            text="📥 批量导入 BibTeX", 
+            command=self._show_batch_import_dialog, 
+            width=140,
+            fg_color="#2b7b5c", hover_color="#1e5c44" # 给个独特的绿色
+        )
+        self.batch_import_btn.grid(row=0, column=1, padx=5)
+        # 默认先隐藏，后续在路由切换时控制显示
+        self.batch_import_btn.grid_remove()
+
+
         # Git 操作按钮
         self.pull_btn = ctk.CTkButton(
             toolbar_frame,
@@ -176,7 +331,7 @@ class MainWindow(ctk.CTk):
             command=self.pull_updates,
             width=100,
         )
-        self.pull_btn.grid(row=0, column=1, padx=5)
+        self.pull_btn.grid(row=0, column=2, padx=5)
 
         self.commit_btn = ctk.CTkButton(
             toolbar_frame,
@@ -184,7 +339,7 @@ class MainWindow(ctk.CTk):
             command=self.commit_and_push,
             width=120,
         )
-        self.commit_btn.grid(row=0, column=2, padx=5)
+        self.commit_btn.grid(row=0, column=3, padx=5)
 
         self.status_btn = ctk.CTkButton(
             toolbar_frame,
@@ -192,7 +347,7 @@ class MainWindow(ctk.CTk):
             command=self.update_git_status,
             width=100,
         )
-        self.status_btn.grid(row=0, column=3, padx=5)
+        self.status_btn.grid(row=0, column=4, padx=5)
 
         # 预览按钮
         self.preview_btn = ctk.CTkButton(
@@ -201,7 +356,7 @@ class MainWindow(ctk.CTk):
             command=self.toggle_preview,
             width=100,
         )
-        self.preview_btn.grid(row=0, column=4, padx=5)
+        self.preview_btn.grid(row=0, column=5, padx=5)
 
         toolbar_frame.grid_columnconfigure(5, weight=1)
 
@@ -236,9 +391,16 @@ class MainWindow(ctk.CTk):
 
         # === 核心修正：针对 projects 模块处理按钮状态 ===
         if name == "projects":
+            self.new_btn.configure(state="disabled")
+            self.batch_import_btn.grid_remove() # 隐藏批量导入
             self._show_projects_table()
+        elif name == "publication":
+            self.new_btn.configure(state="normal")
+            self.batch_import_btn.grid()        # 💡 显示批量导入
+            self._show_list()
         else:
             self.new_btn.configure(state="normal")
+            self.batch_import_btn.grid_remove() # 隐藏批量导入
             self._show_list()
 
         

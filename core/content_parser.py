@@ -293,7 +293,7 @@ class ContentManager:
         except OSError as e:
             logger.error(f"写入文件失败 {index_file}: {e}")
             return False, f"保存文件失败：{str(e)}"
-# === 核心修正 1：先处理图片，修改 form_data ===
+# === 核心处理：图片上传与字段绑定 ===
         if image_path:
             if module_name == 'authors':
                 # 作者头像：强制重命名为 avatar.*（保留原扩展名）
@@ -302,7 +302,6 @@ class ContentManager:
                 if not success:
                     logger.warning(f"图片复制失败: {msg}")
                     return True, f"内容已保存，但图片复制失败：{msg}"
-                # 作者头像无需添加 image 字段
             else:
                 # 其他模块：保持原始文件名，复制到目标文件夹
                 src = Path(image_path)
@@ -317,16 +316,19 @@ class ContentManager:
                     shutil.copy2(src, target_file)
                     logger.info(f"图片复制成功: {src} -> {target_file}")
                     
-                    # 修改为字典格式
-                    form_data['image'] = {'filename': target_filename}
+                    # 兼容复杂的 image 字典结构（如包含 caption）
+                    if 'image' not in form_data or not isinstance(form_data['image'], dict):
+                        form_data['image'] = {}
+                    form_data['image']['filename'] = target_filename
+                    
                 except Exception as e:
                     logger.error(f"图片复制失败: {e}")
                     return True, f"内容未保存，图片复制失败：{e}"
 
         # === 核心修正 2：用包含了 image 字段的 form_data 重新生成 Post ===
+        # === 创建 Post 对象并写入文件 ===
         post = frontmatter.Post(content, **form_data)
 
-        # 写入文件
         try:
             with open(index_file, 'w', encoding='utf-8') as f:
                 f.write(frontmatter.dumps(post))
