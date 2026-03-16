@@ -30,6 +30,7 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 
+
 class MainWindow(ctk.CTk):
     """应用程序主窗口"""
 
@@ -38,6 +39,9 @@ class MainWindow(ctk.CTk):
         ("团队成员", "authors"),
         ("发表成果", "publication"),
         ("研究资源", "resource"),
+        ("研究方向", "research_directions"),   # 新增
+        ("研究领域", "research_fields"),        # 新增
+        ("科研项目", "projects"),                # 新增
         ("全局配置", "settings"),
     ]
 
@@ -201,12 +205,22 @@ class MainWindow(ctk.CTk):
 
         toolbar_frame.grid_columnconfigure(5, weight=1)
 
-        # 内容容器
+        # 内容容器（改为普通 Frame，不再滚动）
         self.content_container = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         self.content_container.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         self.content_container.grid_columnconfigure(0, weight=1)
-        self.content_container.grid_rowconfigure(0, weight=1)
-
+        self.content_container.grid_rowconfigure(0, weight=1)   # 关键：让内部框架可拉伸
+    def _show_projects_table(self):
+        """显示科研项目管理表格"""
+        if self.current_content_frame:
+            self.current_content_frame.destroy()
+        from ui.forms import ProjectsTableFrame  # 修正导入
+        frame = ProjectsTableFrame(
+            self.content_container,
+            on_save_callback=self._show_projects_table  # 保存后重新显示表格
+        )
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.current_content_frame = frame
     # ---------- 路由与视图切换 ----------
     def select_frame_by_name(self, name: str):
         logger.info(f"切换到模块: {name}")
@@ -219,7 +233,15 @@ class MainWindow(ctk.CTk):
             self.current_nav_button = new_button
 
         self.current_module = name
-        self._show_list()
+
+        # === 核心修正：针对 projects 模块处理按钮状态 ===
+        if name == "projects":
+            self._show_projects_table()
+        else:
+            self.new_btn.configure(state="normal")
+            self._show_list()
+
+        
 
     def _show_list(self):
         """显示当前模块的列表视图"""

@@ -23,8 +23,9 @@ import logging
 from typing import List, Callable, Optional, Dict, Any
 import frontmatter
 import customtkinter as ctk
-
+import tkinter.messagebox as messagebox
 from core.content_parser import ContentManager
+import yaml
 
 
 class ContentListFrame(ctk.CTkScrollableFrame):
@@ -115,7 +116,7 @@ class ContentListFrame(ctk.CTkScrollableFrame):
         self._load_items()
 
 
-class ContentFormFrame(ctk.CTkFrame):
+class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
     """
     内容编辑表单，支持新建和更新。
 
@@ -306,7 +307,12 @@ class ContentFormFrame(ctk.CTkFrame):
             self.bibtex_text = ctk.CTkTextbox(self, height=150, width=400)
             self.bibtex_text.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
             row_counter += 1
-
+            
+        if self.module_name in ["research_directions", "research_fields"]:
+                        ctk.CTkLabel(self, text="摘要 (summary)：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                        self.summary_entry = ctk.CTkEntry(self, width=400)
+                        self.summary_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="ew")
+                        row_counter += 1
         # 正文（所有模块都有）
         ctk.CTkLabel(self, text="正文：", anchor="w").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
         self.content_text = ctk.CTkTextbox(self, height=300, width=500)
@@ -417,7 +423,10 @@ class ContentFormFrame(ctk.CTkFrame):
                 self.interests_text.insert("1.0", "\n".join(interests))
             
 
-        # 图片路径无法自动获取，用户需要重新选择或留空
+        if self.module_name in ["research_directions", "research_fields"]:
+                summary = fm.get('summary', '')
+                self.summary_entry.delete(0, 'end')
+                self.summary_entry.insert(0, summary)
 
     def _save(self):
         """收集表单数据并保存"""
@@ -428,25 +437,26 @@ class ContentFormFrame(ctk.CTkFrame):
         }
         content = self.content_text.get("1.0", "end-1c")  # 去除末尾换行
 
+        # 研究方向和研究领域不需要 date 字段（删除它）
+        if self.module_name in ["research_directions", "research_fields"]:
+            if 'date' in form_data:
+                del form_data['date']
+
         # 收集模块特有字段
         if self.module_name == "authors":
             # user_groups 信息
-            # 将下拉框中选中的身份组别保存为列表形式
             form_data['user_groups'] = [self.user_group_option.get()]
 
             # role 信息
-            # 从输入框中获取角色信息，若为空则保存为空字符串
             role_val = self.role_entry.get().strip()
             form_data['role'] = role_val if role_val else ""
 
-            # email 信息
-            # 若邮箱输入框不为空，则保存邮箱地址
+            # email 信息（单独字段，但也会通过 social 列表存储，这里保留 email 字段兼容旧数据）
             email_val = self.email_entry.get().strip()
             if email_val:
                 form_data['email'] = email_val
 
             # organizations 信息
-            # 将多行组织信息解析为包含 name 和 url 的字典列表
             org_text = self.organizations_text.get("1.0", "end-1c").strip()
             org_list = []
             if org_text:
@@ -463,7 +473,6 @@ class ContentFormFrame(ctk.CTkFrame):
                 form_data['organizations'] = org_list
 
             # education 信息
-            # 将多行教育经历解析为包含 course, institution, year 的字典列表
             edu_text = self.education_text.get("1.0", "end-1c").strip()
             edu_list = []
             if edu_text:
@@ -480,11 +489,9 @@ class ContentFormFrame(ctk.CTkFrame):
                 form_data['education'] = {'courses': edu_list}
 
             # social links 信息
-            # 合并新增的社交链接与之前暂存的未知链接，避免数据丢失
-                        # 构建社交链接列表
             social_list = []
 
-            # 邮箱
+            # 邮箱（以 mailto 格式存入 social）
             email_val = self.email_entry.get().strip()
             if email_val:
                 social_list.append({'icon': 'envelope', 'icon_pack': 'fas', 'link': f'mailto:{email_val}'})
@@ -505,12 +512,19 @@ class ContentFormFrame(ctk.CTkFrame):
 
             if social_list:
                 form_data['social'] = social_list
+
             # 研究方向
             interests_text = self.interests_text.get("1.0", "end-1c").strip()
             if interests_text:
                 interests_list = [line.strip() for line in interests_text.split('\n') if line.strip()]
                 if interests_list:
                     form_data['interests'] = interests_list
+
+        elif self.module_name in ["research_directions", "research_fields"]:
+            # 摘要字段（已在前面删除了 date）
+            summary_val = self.summary_entry.get().strip()
+            if summary_val:
+                form_data['summary'] = summary_val
 
         # 调用保存方法
         image_path = self.image_path_var.get() or None
@@ -533,3 +547,166 @@ class ContentFormFrame(ctk.CTkFrame):
         """取消编辑，返回列表"""
         if self.on_cancel_callback:
             self.on_cancel_callback()
+
+
+class ProjectsTableFrame(ctk.CTkFrame):
+    """科研项目管理表格，支持编辑项目列表"""
+    COLUMNS = ["项目编号", "项目名称", "项目来源", "起讫时间", "承担角色", "项目类别"]
+
+    def __init__(self, master, on_save_callback=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.on_save_callback = on_save_callback
+        
+        # 延迟导入以避免循环依赖
+        from core.content_parser import ContentManager
+        self.content_manager = ContentManager()
+        self.config = self.content_manager.config
+        self.file_path = self.config.get_module_dir("projects") / "_index.md"
+        self.rows = []
+        
+        self._create_widgets()
+        self._load_data()
+
+    def _create_widgets(self):
+        # 页面标题
+        ctk.CTkLabel(self, text="科研项目管理", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+
+        # 可编辑的页面标题
+        title_frame = ctk.CTkFrame(self, fg_color="transparent")
+        title_frame.pack(pady=5, padx=10, fill="x")
+        ctk.CTkLabel(title_frame, text="页面标题：", width=100).pack(side="left")
+        self.title_entry = ctk.CTkEntry(title_frame, width=300)
+        self.title_entry.pack(side="left", padx=5)
+
+        # 表格容器
+        self.table_container = ctk.CTkScrollableFrame(self, label_text="项目列表")
+        self.table_container.pack(pady=10, padx=10, fill="both", expand=True)
+
+        # 表头
+        header_frame = ctk.CTkFrame(self.table_container, fg_color="transparent")
+        header_frame.pack(fill="x", pady=2)
+        for i, col in enumerate(self.COLUMNS):
+            ctk.CTkLabel(header_frame, text=col, width=120, anchor="w").grid(row=0, column=i, padx=2)
+
+        # 按钮
+        button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        button_frame.pack(pady=10)
+        self.add_btn = ctk.CTkButton(button_frame, text="添加行", command=self._add_row, width=100)
+        self.add_btn.pack(side="left", padx=5)
+        self.save_btn = ctk.CTkButton(button_frame, text="保存", command=self._save, width=100)
+        self.save_btn.pack(side="left", padx=5)
+        self.cancel_btn = ctk.CTkButton(button_frame, text="取消", command=self._cancel, width=100)
+        self.cancel_btn.pack(side="left", padx=5)
+
+    def _add_row(self, values=None):
+        row_frame = ctk.CTkFrame(self.table_container)
+        row_frame.pack(fill="x", pady=2)
+        entries = []
+        for i in range(6):
+            entry = ctk.CTkEntry(row_frame, width=120)
+            entry.grid(row=0, column=i, padx=2)
+            if values and i < len(values):
+                entry.insert(0, values[i])
+            entries.append(entry)
+        del_btn = ctk.CTkButton(row_frame, text="✖", width=30, command=lambda: self._delete_row(row_frame, entries))
+        del_btn.grid(row=0, column=6, padx=2)
+        self.rows.append((row_frame, entries))
+
+    def _delete_row(self, row_frame, entries):
+        row_frame.destroy()
+        self.rows = [(f, e) for (f, e) in self.rows if f != row_frame]
+
+    def _load_data(self):
+        # 每次加载前清空旧行，防止叠加
+        for f, e in self.rows:
+            f.destroy()
+        self.rows.clear()
+
+        if not self.file_path.exists():
+            self.title_entry.insert(0, "科研项目")
+            return
+        try:
+            with open(self.file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            import frontmatter
+            post = frontmatter.loads(content)
+            self.title_entry.delete(0, 'end')
+            self.title_entry.insert(0, post.metadata.get('title', '科研项目'))
+
+            # === 智能提取表格数据（解决读写一致性 Bug） ===
+            table_text = ""
+            sections = post.metadata.get('sections', [])
+            if sections and isinstance(sections, list) and len(sections) > 0:
+                table_text = sections[0].get('content', {}).get('text', '')
+            
+            if not table_text.strip():
+                table_text = post.content
+
+            # 解析每一行
+            lines = table_text.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                # 过滤掉 markdown 表格的分隔符行和表头行
+                if line.startswith('|') and not line.startswith('| :---') and '项目编号' not in line:
+                    cells = [cell.strip() for cell in line.split('|')[1:-1]]
+                    if len(cells) == 6:
+                        self._add_row(cells)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"加载项目数据失败: {e}")
+            messagebox.showerror("错误", f"加载项目数据失败：{e}")
+
+    def _save(self):
+        rows_data = []
+        for _, entries in self.rows:
+            row = [entry.get().strip() for entry in entries]
+            # 如果整行全空则跳过
+            if all(cell == '' for cell in row):
+                continue
+            rows_data.append(row)
+
+        # 构建表格 Markdown
+        table = "| " + " | ".join(self.COLUMNS) + " |\n"
+        table += "| " + " | ".join([":---"] * 6) + " |\n"
+        for row in rows_data:
+            table += "| " + " | ".join(row) + " |\n"
+
+        # 构建 front matter
+        front_matter = {
+            'title': self.title_entry.get().strip() or '科研项目',
+            'type': 'landing',
+            'sections': [
+                {
+                    'block': 'markdown',
+                    'content': {
+                        'title': '科研项目',
+                        'text': table
+                    },
+                    'design': {
+                        'columns': '1',
+                        'css_class': 'custom-project-table'
+                    }
+                }
+            ]
+        }
+
+        # 写入文件
+        try:
+            self.file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.file_path, 'w', encoding='utf-8') as f:
+                f.write("---\n")
+                yaml.dump(front_matter, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                f.write("---\n\n")
+                # 兼容旧版主题：也将表格写入正文
+                f.write(table)
+                
+            messagebox.showinfo("成功", "科研项目已保存")
+            if self.on_save_callback:
+                self.on_save_callback()
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败：{e}")
+
+    def _cancel(self):
+        """取消编辑，恢复原状"""
+        self._load_data()
+        messagebox.showinfo("已取消", "已放弃修改，恢复为原数据。")

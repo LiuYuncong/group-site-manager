@@ -21,6 +21,7 @@
 
 import re
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Union, Tuple, Optional
@@ -292,15 +293,46 @@ class ContentManager:
         except OSError as e:
             logger.error(f"写入文件失败 {index_file}: {e}")
             return False, f"保存文件失败：{str(e)}"
-        # 处理图片
+# === 核心修正 1：先处理图片，修改 form_data ===
         if image_path:
-            # 确定图片类型
-            image_type = 'avatar' if module_name == 'authors' else 'featured'
-            success, msg = self.config.copy_image_as(image_path, target_dir, image_type)
-            if not success:
-                # 图片复制失败，但内容已保存，返回部分成功提示
-                logger.warning(f"图片复制失败: {msg}")
-                return True, f"内容已保存，但图片复制失败：{msg}"
+            if module_name == 'authors':
+                # 作者头像：强制重命名为 avatar.*（保留原扩展名）
+                image_type = 'avatar'
+                success, msg = self.config.copy_image_as(image_path, target_dir, image_type)
+                if not success:
+                    logger.warning(f"图片复制失败: {msg}")
+                    return True, f"内容已保存，但图片复制失败：{msg}"
+                # 作者头像无需添加 image 字段
+            else:
+                # 其他模块：保持原始文件名，复制到目标文件夹
+                src = Path(image_path)
+                if not src.exists():
+                    logger.warning(f"图片文件不存在: {image_path}")
+                    return True, f"内容未保存，图片文件不存在：{image_path}"
+                
+                target_filename = src.name
+                target_file = target_dir / target_filename
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, target_file)
+                    logger.info(f"图片复制成功: {src} -> {target_file}")
+                    
+                    # 修改为字典格式
+                    form_data['image'] = {'filename': target_filename}
+                except Exception as e:
+                    logger.error(f"图片复制失败: {e}")
+                    return True, f"内容未保存，图片复制失败：{e}"
+
+        # === 核心修正 2：用包含了 image 字段的 form_data 重新生成 Post ===
+        post = frontmatter.Post(content, **form_data)
+
+        # 写入文件
+        try:
+            with open(index_file, 'w', encoding='utf-8') as f:
+                f.write(frontmatter.dumps(post))
+        except OSError as e:
+            logger.error(f"写入文件失败 {index_file}: {e}")
+            return False, f"保存文件失败：{str(e)}"
 
         action = "更新" if original_folder_name else "新建"
         return True, f"{action}成功：{folder_name}"
