@@ -380,13 +380,15 @@ class MainWindow(ctk.CTk):
     def select_frame_by_name(self, name: str):
         logger.info(f"切换到模块: {name}")
 
-        if self.current_nav_button:
-            self.current_nav_button.configure(fg_color="transparent")
+        # 重置所有按钮颜色（确保无残留）
+        for btn in self.nav_buttons.values():
+            btn.configure(fg_color="transparent")
+            
         new_button = self.nav_buttons.get(name)
         if new_button:
             new_button.configure(fg_color=("gray75", "gray25"))
             self.current_nav_button = new_button
-
+            
         self.current_module = name
 
         # === 核心修正：针对 projects 模块处理按钮状态 ===

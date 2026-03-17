@@ -338,3 +338,23 @@ class ContentManager:
 
         action = "更新" if original_folder_name else "新建"
         return True, f"{action}成功：{folder_name}"
+    
+    #删除条目
+    def delete_item(self, module_name: str, folder_name: str) -> Tuple[bool, str]:
+        """
+        删除指定模块下的某个条目（文件夹及其所有内容）。
+        """
+        module_dir = self.config.get_module_dir(module_name)
+        target_dir = module_dir / folder_name
+        if not target_dir.exists():
+            return False, f"条目不存在：{folder_name}"
+        if not target_dir.is_dir():
+            return False, f"路径不是文件夹：{folder_name}"
+        try:
+            import shutil
+            shutil.rmtree(target_dir)
+            logger.info(f"删除条目成功: {target_dir}")
+            return True, f"已删除：{folder_name}"
+        except Exception as e:
+            logger.error(f"删除条目失败 {target_dir}: {e}")
+            return False, f"删除失败：{str(e)}"

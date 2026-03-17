@@ -823,7 +823,48 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
         """取消编辑，返回列表"""
         if self.on_cancel_callback:
             self.on_cancel_callback()
+    #删除条目
+    def _delete_item(self, folder_name: str):
+        """弹出确认对话框，删除指定条目"""
+        if messagebox.askyesno("确认删除", f"确定要删除“{folder_name}”及其所有内容吗？\n此操作不可撤销。"):
+            success, msg = self.content_manager.delete_item(self.module_name, folder_name)
+            if success:
+                messagebox.showinfo("成功", msg)
+                self.refresh()  # 刷新列表
+            else:
+                messagebox.showerror("错误", msg)
 
+    def _create_item_row(self, item: Dict[str, Any]):
+        """创建单个条目行"""
+        row_frame = ctk.CTkFrame(self)
+        row_frame.pack(fill="x", padx=5, pady=2)
+
+        # 标题和日期
+        title = item.get('title', '无标题')
+        date = item.get('date', '')
+        display_text = f"{title}  [{date}]" if date else title
+
+        info_label = ctk.CTkLabel(row_frame, text=display_text, anchor="w")
+        info_label.pack(side="left", padx=10, pady=5, fill="x", expand=True)
+
+        # === 建议的顺序：先 pack 删除 (最右)，再 pack 编辑 ===
+        delete_btn = ctk.CTkButton(
+            row_frame,
+            text="删除",
+            width=60,
+            fg_color="#d9534f",      # 稍微柔和一点的红色
+            hover_color="#c9302c",
+            command=lambda folder=item['folder_name']: self._delete_item(folder)
+        )
+        delete_btn.pack(side="right", padx=10, pady=5)
+
+        edit_btn = ctk.CTkButton(
+            row_frame,
+            text="编辑",
+            width=60,
+            command=lambda folder=item['folder_name']: self.on_edit_callback(folder)
+        )
+        edit_btn.pack(side="right", padx=(10, 0), pady=5)
 
 class ProjectsTableFrame(ctk.CTkFrame):
     """科研项目管理表格，支持编辑项目列表"""
@@ -858,25 +899,36 @@ class ProjectsTableFrame(ctk.CTkFrame):
         self.table_container = ctk.CTkScrollableFrame(self, label_text="项目列表")
         self.table_container.pack(pady=10, padx=10, fill="both", expand=True)
 
-        # 表头
-        header_frame = ctk.CTkFrame(self.table_container, fg_color="transparent")
-        header_frame.pack(fill="x", pady=2)
+        # === 核心修改 1：将 header_frame 保存为 self.header_frame ===
+        self.header_frame = ctk.CTkFrame(self.table_container, fg_color="transparent")
+        self.header_frame.pack(fill="x", pady=2)
         for i, col in enumerate(self.COLUMNS):
-            ctk.CTkLabel(header_frame, text=col, width=120, anchor="w").grid(row=0, column=i, padx=2)
+            ctk.CTkLabel(self.header_frame, text=col, width=120, anchor="w").grid(row=0, column=i, padx=2)
 
         # 按钮
         button_frame = ctk.CTkFrame(self, fg_color="transparent")
         button_frame.pack(pady=10)
-        self.add_btn = ctk.CTkButton(button_frame, text="添加行", command=self._add_row, width=100)
+        
+        # === 核心修改 2：给命令传参，要求置顶添加 ===
+        self.add_btn = ctk.CTkButton(button_frame, text="添加行", command=lambda: self._add_row(at_top=True), width=100)
         self.add_btn.pack(side="left", padx=5)
+        
         self.save_btn = ctk.CTkButton(button_frame, text="保存", command=self._save, width=100)
         self.save_btn.pack(side="left", padx=5)
         self.cancel_btn = ctk.CTkButton(button_frame, text="取消", command=self._cancel, width=100)
         self.cancel_btn.pack(side="left", padx=5)
 
-    def _add_row(self, values=None):
+    def _add_row(self, values=None, at_top=False):
         row_frame = ctk.CTkFrame(self.table_container)
-        row_frame.pack(fill="x", pady=2)
+        
+        # === 核心修改 3：UI 渲染置顶或追加 ===
+        if at_top and hasattr(self, 'header_frame'):
+            # 在 UI 上将新行紧贴在表头下方
+            row_frame.pack(fill="x", pady=2, after=self.header_frame)
+        else:
+            # 默认：追加到末尾（用于加载已有的文件数据）
+            row_frame.pack(fill="x", pady=2)
+
         entries = []
         for i in range(6):
             entry = ctk.CTkEntry(row_frame, width=120)
@@ -884,9 +936,15 @@ class ProjectsTableFrame(ctk.CTkFrame):
             if values and i < len(values):
                 entry.insert(0, values[i])
             entries.append(entry)
+
         del_btn = ctk.CTkButton(row_frame, text="✖", width=30, command=lambda: self._delete_row(row_frame, entries))
         del_btn.grid(row=0, column=6, padx=2)
-        self.rows.append((row_frame, entries))
+        
+        # === 核心修改 4：逻辑列表置顶或追加 ===
+        if at_top:
+            self.rows.insert(0, (row_frame, entries))  # 插入到数据最前面，保证保存时在最上面
+        else:
+            self.rows.append((row_frame, entries))     # 追加到数据末尾
 
     def _delete_row(self, row_frame, entries):
         row_frame.destroy()
