@@ -151,14 +151,24 @@ class ContentListFrame(ctk.CTkScrollableFrame):
         info_label = ctk.CTkLabel(row_frame, text=display_text, anchor="w")
         info_label.pack(side="left", padx=10, pady=5, fill="x", expand=True)
 
-        # 编辑按钮
+        # === 建议的顺序：先 pack 删除 (最右)，再 pack 编辑 ===
+        delete_btn = ctk.CTkButton(
+            row_frame,
+            text="删除",
+            width=60,
+            fg_color="#d9534f",      # 稍微柔和一点的红色
+            hover_color="#c9302c",
+            command=lambda folder=item['folder_name']: self._delete_item(folder)
+        )
+        delete_btn.pack(side="right", padx=10, pady=5)
+
         edit_btn = ctk.CTkButton(
             row_frame,
             text="编辑",
             width=60,
             command=lambda folder=item['folder_name']: self.on_edit_callback(folder)
         )
-        edit_btn.pack(side="right", padx=10, pady=5)
+        edit_btn.pack(side="right", padx=(10, 0), pady=5)
 
     def refresh(self):
         """刷新列表（重新加载）"""
@@ -168,7 +178,16 @@ class ContentListFrame(ctk.CTkScrollableFrame):
         self.loading_label = ctk.CTkLabel(self, text="加载中...", font=ctk.CTkFont(size=14))
         self.loading_label.pack(pady=20)
         self._load_items()
-
+    #删除条目
+    def _delete_item(self, folder_name: str):
+        """弹出确认对话框，删除指定条目"""
+        if messagebox.askyesno("确认删除", f"确定要删除“{folder_name}”及其所有内容吗？\n此操作不可撤销。"):
+            success, msg = self.content_manager.delete_item(self.module_name, folder_name)
+            if success:
+                messagebox.showinfo("成功", msg)
+                self.refresh()  # 刷新列表
+            else:
+                messagebox.showerror("错误", msg)
 
 class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
     """
@@ -823,48 +842,7 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
         """取消编辑，返回列表"""
         if self.on_cancel_callback:
             self.on_cancel_callback()
-    #删除条目
-    def _delete_item(self, folder_name: str):
-        """弹出确认对话框，删除指定条目"""
-        if messagebox.askyesno("确认删除", f"确定要删除“{folder_name}”及其所有内容吗？\n此操作不可撤销。"):
-            success, msg = self.content_manager.delete_item(self.module_name, folder_name)
-            if success:
-                messagebox.showinfo("成功", msg)
-                self.refresh()  # 刷新列表
-            else:
-                messagebox.showerror("错误", msg)
-
-    def _create_item_row(self, item: Dict[str, Any]):
-        """创建单个条目行"""
-        row_frame = ctk.CTkFrame(self)
-        row_frame.pack(fill="x", padx=5, pady=2)
-
-        # 标题和日期
-        title = item.get('title', '无标题')
-        date = item.get('date', '')
-        display_text = f"{title}  [{date}]" if date else title
-
-        info_label = ctk.CTkLabel(row_frame, text=display_text, anchor="w")
-        info_label.pack(side="left", padx=10, pady=5, fill="x", expand=True)
-
-        # === 建议的顺序：先 pack 删除 (最右)，再 pack 编辑 ===
-        delete_btn = ctk.CTkButton(
-            row_frame,
-            text="删除",
-            width=60,
-            fg_color="#d9534f",      # 稍微柔和一点的红色
-            hover_color="#c9302c",
-            command=lambda folder=item['folder_name']: self._delete_item(folder)
-        )
-        delete_btn.pack(side="right", padx=10, pady=5)
-
-        edit_btn = ctk.CTkButton(
-            row_frame,
-            text="编辑",
-            width=60,
-            command=lambda folder=item['folder_name']: self.on_edit_callback(folder)
-        )
-        edit_btn.pack(side="right", padx=(10, 0), pady=5)
+    
 
 class ProjectsTableFrame(ctk.CTkFrame):
     """科研项目管理表格，支持编辑项目列表"""
