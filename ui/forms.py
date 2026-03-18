@@ -379,7 +379,7 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                 row_counter += 1
 
                 # 添加角色输入框，用于描述具体头衔或角色信息
-                ctk.CTkLabel(self, text="头衔/角色 (role)：\n(例如：2021级博士生)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                ctk.CTkLabel(self, text="头衔/角色 (role)：\n(例如：2021级博士生,想展示多行用<br>间隔每项内容)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
                 self.role_entry = ctk.CTkEntry(self, width=250)
                 self.role_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
                 row_counter += 1
@@ -391,7 +391,7 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                 row_counter += 1
 
                 # 排序权重 (weight) —— 新增
-                ctk.CTkLabel(self, text="排序权重 (weight)：\n(数值越小越靠前)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                ctk.CTkLabel(self, text="排序权重 (weight)：\n(数值越小越靠前，推荐按照入学年份填写)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
                 self.weight_entry = ctk.CTkEntry(self, width=100, placeholder_text="例如 1, 2, 3...")
                 self.weight_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
                 row_counter += 1

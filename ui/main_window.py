@@ -379,7 +379,7 @@ class MainWindow(ctk.CTk):
     # ---------- 路由与视图切换 ----------
     def select_frame_by_name(self, name: str):
         logger.info(f"切换到模块: {name}")
-
+        
         # 重置所有按钮颜色（确保无残留）
         for btn in self.nav_buttons.values():
             btn.configure(fg_color="transparent")
@@ -390,22 +390,54 @@ class MainWindow(ctk.CTk):
             self.current_nav_button = new_button
             
         self.current_module = name
-
-        # === 核心修正：针对 projects 模块处理按钮状态 ===
+        
+        # === 核心路由与顶部工具栏按钮状态管理 ===
         if name == "projects":
             self.new_btn.configure(state="disabled")
-            self.batch_import_btn.grid_remove() # 隐藏批量导入
+            self.batch_import_btn.grid_remove() 
             self._show_projects_table()
+            
+        elif name == "settings":
+            # 在设置界面，新建和导入按钮都没有意义，直接隐藏或禁用
+            self.new_btn.configure(state="disabled")
+            self.batch_import_btn.grid_remove() 
+            self._show_settings()
+            
         elif name == "publication":
             self.new_btn.configure(state="normal")
-            self.batch_import_btn.grid()        # 💡 显示批量导入
+            self.batch_import_btn.grid()        
             self._show_list()
+            
         else:
             self.new_btn.configure(state="normal")
-            self.batch_import_btn.grid_remove() # 隐藏批量导入
+            self.batch_import_btn.grid_remove() 
             self._show_list()
+    def _show_settings(self):
+        """显示全局配置界面"""
+        if self.current_content_frame:
+            self.current_content_frame.destroy()
 
+        from ui.forms import SettingsFrame
         
+        frame = SettingsFrame(
+            self.content_container,
+            config=self.config,
+            on_save_callback=self._after_settings_saved
+        )
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.current_content_frame = frame
+
+    def _after_settings_saved(self):
+        """配置保存后的回调，重新初始化 Git 管理器并刷新状态"""
+        from core.git_engine import GitManager
+        
+        # 重新初始化 Git 管理器（因为路径可能变了）
+        self.git_manager = GitManager(self.config.repo_path)
+        self.update_git_status()  # 更新底部状态圆点
+        
+        # 保存后继续留在设置界面
+        self._show_settings()
+    
 
     def _show_list(self):
         """显示当前模块的列表视图"""

@@ -7,19 +7,17 @@ Git 同步引擎模块 (git_engine)
     所有对外方法均返回 (bool, str) 元组，成功时 bool=True，消息为成功提示；
     失败时 bool=False，消息为友好的中文错误信息，绝不抛出异常。
 
-技术栈：
-    - GitPython：操作 Git 仓库
-    - logging：记录内部错误和警告
-    - 类型注解与文档字符串
+安全与并发注意：
+    1. 本模块包含网络与磁盘 I/O，属于同步阻塞调用。UI 层调用时【必须】放入后台工作线程，严禁在主线程直接调用。
+    2. Git 的 stderr 可能包含明文凭证（HTTPS Token 等），本模块的日志系统需确保敏感信息不被落盘。
 
 依赖：
-    - GitPython (需在 requirements.txt 中添加)
+    - GitPython
 """
 
 import logging
 from pathlib import Path
 from typing import Tuple, Union
-
 from git import Repo, GitCommandError, InvalidGitRepositoryError, NoSuchPathError
 
 logger = logging.getLogger(__name__)

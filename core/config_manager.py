@@ -3,7 +3,7 @@
 配置管理模块 (config_manager)
 
 职责：
-    1. 使用单例模式维护全局配置（repo_path, remote_git_url），从用户目录的 config.json 加载/保存。
+    1. 使用单例模式维护全局配置（repo_path, remote_git_url），从用户目录的 .group-site-manager/config.json 加载/保存。
     2. 提供基于 pathlib 的路径辅助方法，用于定位 Hugo 站点的各个内容目录。
     3. 提供安全的图片复制工具，用于将用户选择的图片复制到指定目录并重命名为 featured.* 或 avatar.*。
 
@@ -12,6 +12,10 @@
     - json：配置文件读写
     - logging：记录错误和警告（不涉及 UI）
     - 类型注解与文档字符串确保可维护性
+
+注意事项：
+    - 配置加载失败时会回退到默认配置，并记录错误日志。
+    - 图片复制操作会覆盖目标文件，请确保调用前已确认。
 
 依赖：无（仅使用 Python 标准库）
 """
@@ -35,6 +39,14 @@ class AppConfig:
     默认配置：
         - repo_path: 用户主目录 / group-site-repo
         - remote_git_url: "" (空字符串)
+
+    线程安全：单例创建未加锁，多线程环境下需外部同步。
+
+    Attributes:
+        _instance: 类级别的单例实例。
+        _config_dir: 配置目录 Path 对象。
+        _config_file: 配置文件 Path 对象。
+        _config: 配置数据字典。
     """
 
     _instance = None
@@ -55,7 +67,7 @@ class AppConfig:
         Args:
             auto_load: 是否自动从文件加载配置。若为 False，则使用默认配置（通常用于测试）。
         """
-        # 避免重复初始化
+        # SUGGESTED: 防止重复初始化
         if hasattr(self, '_initialized'):
             return
         self._initialized = True
@@ -71,11 +83,13 @@ class AppConfig:
         """
         加载配置文件，若文件不存在则创建默认配置文件。
         如果目录不存在，也会一并创建。
+
+        Raises:
+            # 该方法内部捕获所有异常，不会向外抛出，仅记录日志。
+            # 调用者可通过检查日志或后续配置值判断是否成功。
         """
         try:
-            # 确保配置目录存在
             self._config_dir.mkdir(parents=True, exist_ok=True)
-
             if self._config_file.exists():
                 with open(self._config_file, 'r', encoding='utf-8') as f:
                     self._config = json.load(f)
@@ -84,11 +98,9 @@ class AppConfig:
                 self._create_default_config()
                 self.save()
                 logger.info(f"已创建默认配置文件: {self._config_file}")
-
         except (OSError, json.JSONDecodeError) as e:
-            logger.error(f"配置文件操作失败: {e}")
-            # 发生错误时回退到默认配置，确保程序可运行
-            self._create_default_config()
+            logger.error(f"配置文件操作失败: {e}，将使用默认配置")
+            self._create_default_config()  # 回退到默认配置
 
     def _create_default_config(self) -> None:
         """生成默认配置字典"""
@@ -124,6 +136,12 @@ class AppConfig:
     @repo_path.setter
     def repo_path(self, value: Union[str, Path]) -> None:
         """设置仓库路径（自动转换为字符串存储）"""
+        # SUGGESTED: 考虑使用 try-except 捕获 resolve() 可能引发的异常
+        # try:
+        #     resolved = str(Path(value).resolve())
+        # except OSError as e:
+        #     logger.error(f"路径解析失败: {e}，将使用原始路径")
+        #     resolved = str(Path(value).absolute())
         self._config["repo_path"] = str(Path(value).resolve())
 
     @property
@@ -201,33 +219,38 @@ class AppConfig:
 
         Returns:
             Tuple[bool, str]: (是否成功, 成功时为目标文件路径字符串，失败时为错误信息)
+
+        Example:
+            >>> config = AppConfig()
+            >>> success, result = config.copy_image_as('C:/temp/photo.jpg', 'C:/repo/content/post/hello', 'featured')
+            >>> if success:
+            ...     print(f"图片已复制到 {result}")
+            ... else:
+            ...     print(f"错误: {result}")
         """
         # 参数校验
         if image_type not in ('featured', 'avatar'):
             return False, f"不支持的图片类型: {image_type}，仅支持 'featured' 或 'avatar'"
 
-        # 解析路径
         src = Path(src_path)
         dst_dir = Path(target_dir)
 
-        # 检查源文件是否存在
+        # 检查源文件是否存在且为文件
         if not src.exists():
             return False, f"源文件不存在: {src}"
         if not src.is_file():
             return False, f"源路径不是文件: {src}"
 
-        # 提取并检查文件扩展名
         suffix = src.suffix.lower()
         if not suffix:
             return False, f"源文件没有扩展名: {src}，无法确定图片格式"
 
-        # 可选：检查文件扩展名是否为常见图片格式（可扩展）
+        # 可选：检查是否为常见图片格式（仅警告，不阻止复制）
         allowed_ext = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg'}
         if suffix not in allowed_ext:
             logger.warning(f"源文件扩展名 {src.suffix} 可能不是常见图片格式，仍将尝试复制")
 
-        # 确定目标文件名：保持 image_type 不变，附加原始扩展名（已小写）
-        target_filename = f"{image_type}{suffix}"
+        target_filename = f"{image_type}{suffix}"  # 注意：扩展名已转为小写
         target_path = dst_dir / target_filename
 
         # 确保目标目录存在
@@ -236,9 +259,9 @@ class AppConfig:
         except OSError as e:
             return False, f"无法创建目标目录 {dst_dir}: {e}"
 
-        # 执行复制
+        # 执行复制，保留元数据
         try:
-            shutil.copy2(src, target_path)  # copy2 保留元数据
+            shutil.copy2(src, target_path)
             logger.info(f"图片复制成功: {src} -> {target_path}")
             return True, str(target_path)
         except (shutil.Error, OSError) as e:

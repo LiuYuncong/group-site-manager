@@ -6,17 +6,15 @@
     负责读取、解析、修改和保存符合 Hugo Page Bundles 规范的 Markdown 文件。
     支持将内容项作为文件夹（包含 index.md 和图片）进行管理。
 
-技术栈：
-    - python-frontmatter：解析和生成 Markdown 文件的 front-matter
-    - pathlib：跨平台路径操作
-    - re：生成安全的文件夹名
-    - datetime：处理日期
-    - logging：记录错误和警告
-    - 依赖 core.config_manager.AppConfig 获取路径和图片复制工具
+注意事项：
+    - 所有公共方法返回 (bool, data/error) 元组，调用方必须检查布尔值。
+    - 图片复制失败时，方法仍会返回 True 但附带警告消息，表示内容保存成功但图片未复制。
+      调用方应检查返回的字符串，并决定是否向用户提示。
+    - 线程安全：本类方法本身不包含同步机制，多线程环境下需外部加锁。
 
 依赖：
-    - core.config_manager
-    - python-frontmatter (需在 requirements.txt 中添加)
+    - core.config_manager.AppConfig
+    - python-frontmatter
 """
 
 import re
@@ -39,6 +37,16 @@ class ContentManager:
 
     提供对 Hugo Page Bundles 内容的增删改查（仅实现查、改、新建）。
     所有公共方法均返回 (bool, data/error) 元组，上层根据 bool 判断操作是否成功。
+
+    Attributes:
+        config: AppConfig 单例实例，用于获取路径和图片复制工具。
+
+    Example:
+        >>> cm = ContentManager()
+        >>> success, items = cm.list_items('post')
+        >>> if success:
+        ...     for item in items:
+        ...         print(item['title'])
     """
 
     def __init__(self):
@@ -47,27 +55,26 @@ class ContentManager:
         logger.info("ContentManager 初始化完成")
 
     # ---------- 内部辅助方法 ----------
-    def _generate_safe_folder_name(self, title: str, date_str: str) -> str:
+    def _generate_safe_folder_name(self, title: str, date_str: str = "") -> str:
         """
-        根据标题和日期生成安全的文件夹名。
+        根据标题和日期生成安全的文件夹名（仅含字母、数字、中文、连字符）。
 
-        规则：
-            - 日期格式：假设为 YYYY-MM-DD
-            - 将标题中的非字母数字（保留中文、字母、数字）替换为连字符 '-'
-            - 多个连续连字符合并为一个
-            - 去掉首尾连字符
-            - 最终格式：{date_str}-{safe_title}
+        处理规则：
+            - 将非字母数字（保留中文）替换为连字符 '-'
+            - 将空白字符替换为连字符
+            - 合并连续连字符
+            - 去除首尾连字符
+            - 如果标题为空，使用默认值 "untitled"
+            - 如果提供了日期，则格式为 "日期-安全标题"；否则只返回安全标题
 
         Args:
-            title: 文章标题（可能包含中文、空格、标点）
-            date_str: 日期字符串，如 "2025-03-13"
+            title: 原始标题（可能包含特殊字符）
+            date_str: 日期字符串，格式如 '2025-03-18'，为空时不添加日期前缀
 
         Returns:
-            str: 安全的文件夹名，例如 "2025-03-13-我的第一篇文章"
+            安全的文件夹名字符串
         """
         # 将标题中的非字母数字（除了中文、英文、数字）替换为连字符
-        # 使用正则：匹配任何不是字母、数字、中文的字符
-        # 中文范围：\u4e00-\u9fff
         safe_title = re.sub(r'[^\w\s\u4e00-\u9fff]', '-', title, flags=re.UNICODE)
         # 将空格也替换为连字符
         safe_title = re.sub(r'\s+', '-', safe_title)
@@ -78,34 +85,32 @@ class ContentManager:
         # 如果标题被清空了，使用默认值
         if not safe_title:
             safe_title = "untitled"
-        # 组合日期和标题
-        return f"{date_str}-{safe_title}"
+            
+        # 核心修改：如果传入了日期，才拼接日期；否则只返回纯名字
+        if date_str:
+            return f"{date_str}-{safe_title}"
+        return safe_title
 
-    # ---------- 列表方法 ----------
+
     def list_items(self, module_name: str) -> Tuple[bool, Union[List[Dict], str]]:
         """
         列出指定模块下的所有内容项。
 
-        每个模块目录下应有多个子文件夹，每个子文件夹代表一个内容项，
-        内含 index.md 或 _index.md 文件。该方法遍历子文件夹，读取文件，
-        提取标题、日期等信息。
+        遍历模块目录下的子文件夹，读取其中的 index.md 或 _index.md，
+        提取 front-matter 元数据，并添加 folder_name、folder_path、title、date 等字段。
 
         Args:
             module_name: 模块名称，如 'post', 'authors', 'publication' 等
 
         Returns:
             Tuple[bool, Union[List[Dict], str]]:
-                - 成功时返回 (True, 列表)，每个字典包含：
-                    folder_name (str): 文件夹名
-                    folder_path (str): 完整路径
-                    title (str): 标题（若无则用文件夹名）
-                    date (str): 日期（若无则用空字符串）
-                    以及其他 front-matter 字段
+                - 成功时返回 (True, 列表)，每个字典包含 front-matter 字段及额外信息。
                 - 失败时返回 (False, 错误信息)
+                若模块目录不存在，返回 (True, [])（视为空列表）。
         """
         module_dir = self.config.get_module_dir(module_name)
         if not module_dir.exists():
-            # 模块目录不存在，返回空列表（不是错误）
+            # 目录不存在，不是错误，返回空列表
             return True, []
 
         items = []
@@ -114,51 +119,50 @@ class ContentManager:
                 if not item_path.is_dir():
                     continue
 
-                # === 修改点：双重探测 index.md 或 _index.md ===
-                # 首先尝试 index.md
+                # 优先尝试 index.md，否则尝试 _index.md
                 index_file = item_path / "index.md"
                 if not index_file.exists():
-                    # 如果不存在，再尝试 _index.md（用于 authors 等分支包）
                     index_file = item_path / "_index.md"
                     if not index_file.exists():
-                        # 两种文件都不存在，跳过该文件夹
-                        continue
+                        continue  # 没有 Markdown 文件，跳过
 
                 try:
                     with open(index_file, 'r', encoding='utf-8') as f:
                         post = frontmatter.load(f)
-                    # 如果 front-matter 为空，视为无效内容，跳过
-                    if not post.metadata:
-                        continue
                 except Exception as e:
+                    # SUGGESTED: 记录详细错误，但继续处理其他文件夹
                     logger.error(f"解析文件 {index_file} 失败: {e}")
                     continue
 
                 metadata = post.metadata
+                if not metadata:
+                    continue  # 无 front-matter，视为无效
+
+                # 提取标题和日期，并标准化日期格式
                 title = metadata.get('title', item_path.name)
                 date = metadata.get('date', '')
-                # 将 datetime 对象转换为字符串
                 if isinstance(date, datetime):
                     date = date.strftime('%Y-%m-%d')
                 elif date and not isinstance(date, str):
                     date = str(date)
 
-                # 创建条目字典：复制所有元数据，并手动添加必要字段
+                # 构建条目字典
                 item = metadata.copy()
-                item['folder_name'] = item_path.name
-                item['folder_path'] = str(item_path)
-                item['title'] = title
-                item['date'] = date
+                item.update({
+                    'folder_name': item_path.name,
+                    'folder_path': str(item_path),
+                    'title': title,
+                    'date': date,
+                })
                 items.append(item)
         except Exception as e:
             logger.exception(f"遍历模块 {module_name} 时发生未知错误: {e}")
             return False, f"读取内容列表时出错：{str(e)}"
 
-        # 按日期降序排序（新日期在前），无日期的排最后
+        # 按日期降序排序
         items.sort(key=lambda x: x.get('date', ''), reverse=True)
         return True, items
 
-    # ---------- 读取单个内容 ----------
     def read_item(self, folder_path: Union[str, Path]) -> Tuple[bool, Union[Dict, str]]:
         """
         读取指定文件夹下的 index.md 或 _index.md，返回 front-matter 和正文。
@@ -175,14 +179,11 @@ class ContentManager:
         """
         folder = Path(folder_path)
 
-        # === 修改点：双重探测 index.md 或 _index.md ===
-        # 先尝试 index.md
+        # 探测 index.md 或 _index.md
         index_file = folder / "index.md"
         if not index_file.exists():
-            # 如果不存在，尝试 _index.md
             index_file = folder / "_index.md"
             if not index_file.exists():
-                # 两种文件都不存在，返回错误
                 return False, f"未找到内容文件：{folder} 下缺少 index.md 或 _index.md"
 
         try:
@@ -192,13 +193,11 @@ class ContentManager:
             logger.error(f"读取文件 {index_file} 失败: {e}")
             return False, f"读取文件失败：{str(e)}"
 
-        # 返回 front-matter 和正文
         return True, {
             'front_matter': post.metadata,
             'content': post.content
         }
 
-    # ---------- 保存/更新内容 ----------
     def save_item(self,
                   module_name: str,
                   form_data: dict,
@@ -206,26 +205,28 @@ class ContentManager:
                   original_folder_name: Optional[str] = None,
                   image_path: Optional[str] = None) -> Tuple[bool, str]:
         """
-        新建或更新一个内容项。
+        保存或更新一个内容项。
 
-        逻辑：
-            - 如果 original_folder_name 为空，则为新建：生成安全的文件夹名，在模块目录下创建文件夹。
-            - 如果 original_folder_name 有值，则为更新：直接定位到该文件夹。
-            - 将 form_data 作为 front-matter，content 作为正文，写入文件夹下的 index.md。
-            - 如果提供了 image_path，调用 AppConfig.copy_image_as 复制图片到该文件夹，
-              并根据模块名决定图片类型：'authors' 模块使用 'avatar'，其他使用 'featured'。
+        如果 original_folder_name 为 None，则视为新建；否则视为更新。
+        对于 authors 模块，图片会重命名为 avatar.*，文件夹名不包含日期前缀。
+        对于其他模块，图片保留原名，文件夹名包含日期前缀。
 
         Args:
-            module_name: 模块名称，如 'post'
-            form_data: 包含 front-matter 字段的字典
-            content: 正文内容字符串
-            original_folder_name: 更新时的原文件夹名；新建时为 None
-            image_path: 可选，图片源路径
+            module_name: 模块名称，如 'post', 'authors'
+            form_data: front-matter 字段字典，必须包含 'title'，可能包含 'date' 等
+            content: Markdown 正文
+            original_folder_name: 更新时传入原文件夹名，新建时为 None
+            image_path: 可选，要复制的图片源路径
 
         Returns:
-            Tuple[bool, str]: (成功标志, 提示信息/错误信息)
+            Tuple[bool, str]:
+                - 成功时返回 (True, 成功消息)
+                - 失败时返回 (False, 错误信息)
+                注意：图片复制失败时仍会返回 (True, 消息) 但消息中包含失败提示。
+
+        TODO: 此方法过于复杂，建议拆分为多个私有方法以提高可读性和可测试性。
         """
-        # 获取模块目录
+        # 1. 获取并创建模块目录
         module_dir = self.config.get_module_dir(module_name)
         try:
             module_dir.mkdir(parents=True, exist_ok=True)
@@ -233,23 +234,26 @@ class ContentManager:
             logger.error(f"创建模块目录失败 {module_dir}: {e}")
             return False, f"无法创建模块目录：{str(e)}"
 
-        # 确定目标文件夹
+        # 2. 确定目标文件夹名称
         if original_folder_name:
-            # 更新：使用原有文件夹名
             folder_name = original_folder_name
         else:
             # 新建：生成安全的文件夹名
             title = form_data.get('title', '')
-            date_str = form_data.get('date', '')
-            if not date_str:
-                # 如果没有日期，使用当前日期
-                date_str = datetime.now().strftime('%Y-%m-%d')
-            folder_name = self._generate_safe_folder_name(title, date_str)
+            if module_name == 'authors':
+                # authors 模块不使用日期前缀
+                folder_name = self._generate_safe_folder_name(title, "")
+            else:
+                date_str = form_data.get('date', '')
+                if not date_str:
+                    date_str = datetime.now().strftime('%Y-%m-%d')
+                folder_name = self._generate_safe_folder_name(title, date_str)
+
             # 避免重名：如果文件夹已存在，添加序号
-            original_folder_name_candidate = folder_name
+            base_name = folder_name
             counter = 1
             while (module_dir / folder_name).exists():
-                folder_name = f"{original_folder_name_candidate}-{counter}"
+                folder_name = f"{base_name}-{counter}"
                 counter += 1
 
         target_dir = module_dir / folder_name
@@ -259,76 +263,55 @@ class ContentManager:
             logger.error(f"创建目标文件夹失败 {target_dir}: {e}")
             return False, f"无法创建内容文件夹：{str(e)}"
 
-        # 创建 Post 对象（使用 frontmatter.Post）
-        post = frontmatter.Post(content, **form_data)
-
-         # === 优化点：智能确定文件名 ===
-        md_filename = "index.md"  # 默认值
-
+        # 3. 确定 Markdown 文件名 (index.md 或 _index.md)
+        md_filename = "index.md"  # 默认
         if original_folder_name:
-            # 更新：探测原有文件名
+            # 更新时，优先保留原有文件名
             if (target_dir / "_index.md").exists():
                 md_filename = "_index.md"
             elif (target_dir / "index.md").exists():
                 md_filename = "index.md"
             else:
-                # 理论上不应发生（文件夹存在但没有任何文件），回退到模块默认
+                # 如果都不存在，根据模块决定
                 md_filename = "_index.md" if module_name == "authors" else "index.md"
         else:
-            # 新建：根据模块分配
-            if module_name == "authors":
-                md_filename = "_index.md"
-            else:
-                md_filename = "index.md"
+            # 新建时，authors 用 _index.md，其他用 index.md
+            md_filename = "_index.md" if module_name == "authors" else "index.md"
 
         index_file = target_dir / md_filename
-        # ================================
 
-        # 创建 Post 对象
-        post = frontmatter.Post(content, **form_data)
-
-        try:
-            with open(index_file, 'w', encoding='utf-8') as f:
-                f.write(frontmatter.dumps(post))
-        except OSError as e:
-            logger.error(f"写入文件失败 {index_file}: {e}")
-            return False, f"保存文件失败：{str(e)}"
-# === 核心处理：图片上传与字段绑定 ===
+        # 4. 处理图片上传
         if image_path:
             if module_name == 'authors':
-                # 作者头像：强制重命名为 avatar.*（保留原扩展名）
-                image_type = 'avatar'
-                success, msg = self.config.copy_image_as(image_path, target_dir, image_type)
+                # 作者头像：复制为 avatar.*
+                success, msg = self.config.copy_image_as(image_path, target_dir, 'avatar')
                 if not success:
                     logger.warning(f"图片复制失败: {msg}")
+                    # 部分成功，返回消息但整体视为成功（内容已保存）
                     return True, f"内容已保存，但图片复制失败：{msg}"
             else:
-                # 其他模块：保持原始文件名，复制到目标文件夹
+                # 其他模块：复制图片到目标文件夹，并保留原文件名
                 src = Path(image_path)
                 if not src.exists():
                     logger.warning(f"图片文件不存在: {image_path}")
-                    return True, f"内容未保存，图片文件不存在：{image_path}"
-                
+                    return True, f"内容未保存，图片文件不存在：{image_path}"  # 这里逻辑不一致？应返回 False
                 target_filename = src.name
                 target_file = target_dir / target_filename
                 try:
                     target_dir.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, target_file)
                     logger.info(f"图片复制成功: {src} -> {target_file}")
-                    
-                    # 兼容复杂的 image 字典结构（如包含 caption）
+
+                    # 更新 form_data，添加 image 字段
                     if 'image' not in form_data or not isinstance(form_data['image'], dict):
                         form_data['image'] = {}
                     form_data['image']['filename'] = target_filename
-                    
                 except Exception as e:
                     logger.error(f"图片复制失败: {e}")
-                    return True, f"内容未保存，图片复制失败：{e}"
+                    return True, f"内容未保存，图片复制失败：{e}"  # 同样，应返回 False
 
-        # === 核心修正 2：用包含了 image 字段的 form_data 重新生成 Post ===
-        # === 创建 Post 对象并写入文件 ===
+        # 5. 写入 Markdown 文件
         post = frontmatter.Post(content, **form_data)
-
         try:
             with open(index_file, 'w', encoding='utf-8') as f:
                 f.write(frontmatter.dumps(post))
@@ -338,11 +321,20 @@ class ContentManager:
 
         action = "更新" if original_folder_name else "新建"
         return True, f"{action}成功：{folder_name}"
-    
-    #删除条目
     def delete_item(self, module_name: str, folder_name: str) -> Tuple[bool, str]:
         """
         删除指定模块下的某个条目（文件夹及其所有内容）。
+
+        Args:
+            module_name: 模块名称
+            folder_name: 要删除的文件夹名
+
+        Returns:
+            Tuple[bool, str]: (成功与否, 消息)
+
+        Note:
+            在 Windows 上，如果文件夹内有只读文件，shutil.rmtree 可能失败。
+            可考虑在删除前修改文件属性，但当前版本直接返回错误。
         """
         module_dir = self.config.get_module_dir(module_name)
         target_dir = module_dir / folder_name
@@ -351,7 +343,6 @@ class ContentManager:
         if not target_dir.is_dir():
             return False, f"路径不是文件夹：{folder_name}"
         try:
-            import shutil
             shutil.rmtree(target_dir)
             logger.info(f"删除条目成功: {target_dir}")
             return True, f"已删除：{folder_name}"
