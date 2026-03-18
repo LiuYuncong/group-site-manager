@@ -383,6 +383,18 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                 self.role_entry = ctk.CTkEntry(self, width=250)
                 self.role_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
                 row_counter += 1
+
+                # 入学年份 (enrollment_year) —— 新增
+                ctk.CTkLabel(self, text="入学年份：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
+                self.enrollment_year_entry = ctk.CTkEntry(self, width=100, placeholder_text="例如 2023")
+                self.enrollment_year_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
+
+                # 排序权重 (weight) —— 新增
+                ctk.CTkLabel(self, text="排序权重 (weight)：\n(数值越小越靠前)", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="nw")
+                self.weight_entry = ctk.CTkEntry(self, width=100, placeholder_text="例如 1, 2, 3...")
+                self.weight_entry.grid(row=row_counter, column=1, padx=10, pady=5, sticky="w")
+                row_counter += 1
                             # 新增：联系邮箱
                 ctk.CTkLabel(self, text="邮箱 (email)：", anchor="w", justify="left").grid(row=row_counter, column=0, padx=10, pady=5, sticky="w")
                 self.email_entry = ctk.CTkEntry(self, width=300)
@@ -596,7 +608,15 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
                         email_link = link
                 else:
                     other_social.append(item)
+            # 加载入学年份（自定义字段 enrollment_year）
+            enrollment_year = fm.get('enrollment_year', '')
+            self.enrollment_year_entry.delete(0, 'end')
+            self.enrollment_year_entry.insert(0, enrollment_year)
 
+            # 加载 weight
+            weight = fm.get('weight', '')
+            self.weight_entry.delete(0, 'end')
+            self.weight_entry.insert(0, str(weight) if weight else '')
             # 填充邮箱、Google Scholar、ResearchGate 输入框
             self.email_entry.delete(0, 'end')
             self.email_entry.insert(0, email_link)
@@ -698,7 +718,23 @@ class ContentFormFrame(ctk.CTkScrollableFrame):  # 原为 ctk.CTkFrame
             # role 信息
             role_val = self.role_entry.get().strip()
             form_data['role'] = role_val if role_val else ""
+            # 入学年份
+            enrollment_year_val = self.enrollment_year_entry.get().strip()
+            if enrollment_year_val:
+                form_data['enrollment_year'] = enrollment_year_val
+            else:
+                form_data.pop('enrollment_year', None)  # 避免空字段
 
+            # 排序权重
+            weight_val = self.weight_entry.get().strip()
+            if weight_val:
+                try:
+                    form_data['weight'] = int(weight_val)
+                except ValueError:
+                    messagebox.showwarning("警告", "排序权重必须是整数")
+                    return
+            else:
+                form_data.pop('weight', None)
             # email 信息（单独字段，但也会通过 social 列表存储，这里保留 email 字段兼容旧数据）
             email_val = self.email_entry.get().strip()
             if email_val:
@@ -1022,3 +1058,80 @@ class ProjectsTableFrame(ctk.CTkFrame):
         """取消编辑，恢复原状"""
         self._load_data()
         messagebox.showinfo("已取消", "已放弃修改，恢复为原数据。")
+
+
+class SettingsFrame(ctk.CTkFrame):
+    """全局配置界面，用于修改本地仓库路径和远程 Git URL"""
+    def __init__(self, master, config, on_save_callback=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.config = config
+        self.on_save_callback = on_save_callback
+        self._create_widgets()
+        self._load_settings()
+
+    def _create_widgets(self):
+        # 标题
+        ctk.CTkLabel(self, text="全局配置", font=ctk.CTkFont(size=18, weight="bold")).grid(
+            row=0, column=0, columnspan=3, padx=20, pady=20
+        )
+        
+        # 本地仓库路径
+        ctk.CTkLabel(self, text="本地仓库路径：", anchor="w").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        self.repo_path_entry = ctk.CTkEntry(self, width=400)
+        self.repo_path_entry.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        self.browse_btn = ctk.CTkButton(self, text="浏览...", width=80, command=self._browse_folder)
+        self.browse_btn.grid(row=1, column=2, padx=10, pady=10)
+        
+        # 远程 Git URL
+        ctk.CTkLabel(self, text="远程 Git URL：", anchor="w").grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        self.remote_url_entry = ctk.CTkEntry(self, width=400)
+        self.remote_url_entry.grid(row=2, column=1, columnspan=2, padx=10, pady=10, sticky="ew")
+        
+        # 按钮行
+        button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        button_frame.grid(row=3, column=0, columnspan=3, pady=20)
+        self.save_btn = ctk.CTkButton(button_frame, text="保存", command=self._save, width=100)
+        self.save_btn.pack(side="left", padx=10)
+        self.cancel_btn = ctk.CTkButton(button_frame, text="取消", command=self._cancel, width=100)
+        self.cancel_btn.pack(side="left", padx=10)
+        
+        self.grid_columnconfigure(1, weight=1)
+
+    def _browse_folder(self):
+        """打开文件夹选择对话框"""
+        folder = filedialog.askdirectory(title="选择本地仓库目录")
+        if folder:
+            self.repo_path_entry.delete(0, 'end')
+            self.repo_path_entry.insert(0, folder)
+
+    def _load_settings(self):
+        """加载当前配置到输入框"""
+        self.repo_path_entry.delete(0, 'end')
+        self.repo_path_entry.insert(0, str(self.config.repo_path))
+        self.remote_url_entry.delete(0, 'end')
+        self.remote_url_entry.insert(0, self.config.remote_git_url)
+
+    def _save(self):
+        """保存配置"""
+        new_repo_path = self.repo_path_entry.get().strip()
+        new_remote_url = self.remote_url_entry.get().strip()
+        
+        if not new_repo_path:
+            messagebox.showwarning("警告", "本地仓库路径不能为空")
+            return
+            
+        # 【安全修正】：转换为 Path 对象，防止其他模块拼接路径时报错
+        self.config.repo_path = Path(new_repo_path)
+        self.config.remote_git_url = new_remote_url
+        
+        if self.config.save():
+            messagebox.showinfo("成功", "配置已保存。")
+            if self.on_save_callback:
+                self.on_save_callback()
+        else:
+            messagebox.showerror("错误", "保存配置失败，请检查日志。")
+
+    def _cancel(self):
+        """取消编辑，返回上一级"""
+        if self.on_save_callback:
+            self.on_save_callback()
