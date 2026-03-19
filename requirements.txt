@@ -1,0 +1,17 @@
+
+# UI 核心框架：现代化的 Tkinter 封装，建议锁定此稳定版本以确保 Windows 外观表现一致
+customtkinter==5.2.2
+
+# 核心依赖：用于底层 Git 操作驱动
+GitPython==3.1.42
+
+# 核心依赖：安全解析与序列化 Markdown 文件的 Front-matter
+python-frontmatter==1.1.0
+
+# 核心依赖：用于解析论文出版物的 BibTeX 字符串 (锁定 1.4.1，避免 2.x beta 版本 API 破坏)
+bibtexparser==1.4.1
+
+# -----------------
+# 可选开发/测试依赖
+# pytest==7.4.3 # dev
+# pyinstaller==6.3.0 # dev (用于最终打包为 Windows exe)
